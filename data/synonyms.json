@@ -1,0 +1,22 @@
+{
+  "大模型": ["LLM", "大语言模型", "large language model"],
+  "微调": ["fine-tuning", "fine tuning", "指令微调", "SFT"],
+  "检索增强生成": ["RAG", "retrieval augmented generation"],
+  "知识图谱": ["KG", "knowledge graph", "图谱"],
+  "向量数据库": ["vector database", "向量库"],
+  "embedding": ["向量化", "词嵌入", "向量表示"],
+  "提示词": ["prompt", "提示工程"],
+  "智能问答": ["QA", "问答系统", "问答服务"],
+  "语义检索": ["向量检索", "语义搜索"],
+  "深度学习": ["deep learning", "DL"],
+  "神经网络": ["neural network", "NN"],
+  "注意力机制": ["attention mechanism", "self-attention", "自注意力"],
+  "Transformer": ["transformer模型", "变换器"],
+  "预训练": ["pre-training", "pretraining"],
+  "推理": ["inference", "推断"],
+  "部署": ["deploy", "deployment", "上线"],
+  "容器化": ["docker", "container", "容器"],
+  "知识库": ["knowledge base", "KB"],
+  "多轮对话": ["multi-turn dialogue", "上下文对话"],
+  "幻觉": ["hallucination", "hallucinate", "幻觉问题"]
+}

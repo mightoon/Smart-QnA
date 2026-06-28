@@ -1,0 +1,87 @@
+{
+  "llm": {
+    "active": "deepseek",
+    "items": {
+      "deepseek": {
+        "name": "DeepSeek",
+        "api_base": "https://tokenhub.tencentmaas.com/plan/v3",
+        "api_key": "b64:c2stdHAtaEhqN05zVkNQT1hYS1NEM0pYTmJoRFpuamRVdXdZdnBlMVd6dk83T29nSnVXMVpz",
+        "model": "deepseek-v4-flash",
+        "entity_model": "deepseek-v4-flash",
+        "temperature": 0.7,
+        "max_tokens": 2048
+      }
+    }
+  },
+  "elasticsearch": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "url": "",
+        "username": "",
+        "password": "",
+        "article_index": "article",
+        "article_fields": {"body": "content", "title": "title"},
+        "qna_index": "qna",
+        "qna_fields": {"body": "answer", "title": "question"},
+        "verify_certs": false
+      }
+    }
+  },
+  "neo4j": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "uri": "",
+        "username": "neo4j",
+        "password": "",
+        "database": "neo4j",
+        "node_key": "name",
+        "max_neighbors": 10,
+        "excluded_relations": ["contains", "references"]
+      }
+    }
+  },
+  "rerank": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "api_base": "",
+        "api_key": "",
+        "model": "",
+        "top_n": 5
+      }
+    }
+  },
+  "embedding": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "api_base": "",
+        "api_key": "",
+        "model": "text-embedding-3-small"
+      }
+    }
+  },
+  "milvus": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "uri": "http://localhost:19530",
+        "collection_name": "documents",
+        "vector_field": "embedding",
+        "text_field": "content",
+        "metric_type": "COSINE"
+      }
+    }
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
