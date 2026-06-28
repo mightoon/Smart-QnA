@@ -283,10 +283,10 @@ docker-compose up -d
 
 ## 10. 文档
 
-* [spec.md](spec.md) —— 完整技术规格说明（架构/配置模型/API/检索策略/提示词/指标/异常/测试）
-* [RAG.md](RAG.md) —— RAG 检索逻辑剖析（ES/KG/Vec 检索细节 + 同义词扩展 + 融合策略 + 数据流）
-* [配置手册.md](配置手册.md) —— ES 索引配置手册（中文分词器/停用词/同义词词典/精确度调优）
-* [client.md](client.md) —— 客户端演示脚本说明（8 种模式 case 详解）
+* [docs/spec.md](docs/spec.md) —— 完整技术规格说明（架构/配置模型/API/检索策略/提示词/指标/异常/测试）
+* [docs/RAG.md](docs/RAG.md) —— RAG 检索逻辑剖析（ES/KG/Vec 检索细节 + 同义词扩展 + 融合策略 + 数据流）
+* [docs/config_manual.md](docs/config_manual.md) —— ES 索引配置手册（中文分词器/停用词/同义词词典/精确度调优）
+* [docs/client.md](docs/client.md) —— 客户端演示脚本说明（8 种模式 case 详解）
 * [API 文档](http://localhost:8000/docs) —— Swagger UI（启动后访问）
 
 ## 11. 项目 Skills
