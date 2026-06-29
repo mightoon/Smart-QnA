@@ -262,6 +262,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .cfg-editor .checkbox { display: flex; align-items: center; gap: 6px; color: var(--text); }
 .cfg-editor .checkbox input { width: auto; margin: 0; }
+.cfg-editor select {
+  width: 100%;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 9px;
+  font-size: 13px;
+}
+.cfg-editor .field-mapping {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  gap: 12px;
+}
+.cfg-editor .field-mapping legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.cfg-editor .field-mapping label { flex: 1; }
 .cfg-editor .editor-actions {
   display: flex;
   gap: 8px;

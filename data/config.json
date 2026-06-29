@@ -5,11 +5,20 @@
       "deepseek": {
         "name": "DeepSeek",
         "api_base": "https://tokenhub.tencentmaas.com/plan/v3",
-        "api_key": "b64:c2st",
+        "api_key": "b64:c2stdHAta04xxxxxxxxxxxxxxxxxxxxFmMTVT",
         "model": "deepseek-v4-flash",
         "entity_model": "deepseek-v4-flash",
         "temperature": 0.7,
         "max_tokens": 2048
+      },
+      "item": {
+        "name": "外网模型",
+        "api_base": "http://192.168.100.242:10136/v1",
+        "api_key": "",
+        "model": "qwen36-35b",
+        "entity_model": "qwen36-35b",
+        "temperature": "",
+        "max_tokens": ""
       }
     }
   },
@@ -17,14 +26,21 @@
     "active": "default",
     "items": {
       "default": {
-        "name": "默认",
-        "url": "",
+        "name": "外网es",
+        "version": "v8",
+        "url": "http://192.168.100.153:9200",
         "username": "",
         "password": "",
         "article_index": "article",
-        "article_fields": {"body": "content", "title": "title"},
+        "article_fields": {
+          "body": "content",
+          "title": "title"
+        },
         "qna_index": "qna",
-        "qna_fields": {"body": "answer", "title": "question"},
+        "qna_fields": {
+          "body": "answer",
+          "title": "question"
+        },
         "verify_certs": false
       }
     }
@@ -33,14 +49,14 @@
     "active": "default",
     "items": {
       "default": {
-        "name": "默认",
-        "uri": "",
+        "name": "外网neo4j",
+        "uri": "bolt://192.168.100.246:8687",
         "username": "neo4j",
-        "password": "",
+        "password": "b64:bmVvNGpAMTIz",
         "database": "neo4j",
         "node_key": "name",
         "max_neighbors": 10,
-        "excluded_relations": ["contains", "references"]
+        "excluded_relations": "contains,references"
       }
     }
   },

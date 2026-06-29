@@ -92,6 +92,7 @@ class ESClient:
 
     def __init__(self, es_config: dict):
         self.url = es_config.get("url", "http://localhost:9200")
+        self.version = es_config.get("version", "v8")
         self.username = es_config.get("username", "")
         self.password = es_config.get("password", "")
         self.article_index = es_config.get("article_index", "article")
@@ -114,11 +115,13 @@ class ESClient:
             if self.username:
                 kwargs["basic_auth"] = (self.username, self.password)
             kwargs["verify_certs"] = self.verify_certs
+            kwargs["ssl_show_warn"] = False
             self._client = AsyncElasticsearch(**kwargs)
         return self._client
 
     def reconfigure(self, es_config: dict) -> None:
         self.url = es_config.get("url", "http://localhost:9200")
+        self.version = es_config.get("version", "v8")
         self.username = es_config.get("username", "")
         self.password = es_config.get("password", "")
         self.article_index = es_config.get("article_index", "article")

@@ -10,8 +10,16 @@
   # 只注入 ES
   python seed_data.py --es-only --es-url http://localhost:9200
 
-  # 只注入 Neo4j
+  # 只注入 Neo4j（使用独立 database 隔离数据，需 Enterprise 版）
+  python seed_data.py --neo4j-only --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j --neo4j-password yourpass --neo4j-database qna --neo4j-create-db
+
+  # 只注入 Neo4j（Community 版，使用默认 neo4j database，仅清理特定 label）
   python seed_data.py --neo4j-only --neo4j-uri bolt://localhost:7687 --neo4j-user neo4j --neo4j-password yourpass
+
+安全说明：
+  - Neo4j 注入仅删除带 QnaSeed 专属标签的节点，不影响用户已有数据。
+  - 所有注入节点均打上 QnaSeed 标签 + 业务标签（如 Model/Company/Concept/Tool）。
+  - Community 版直接在默认 neo4j database 注入，通过 QnaSeed 标签逻辑隔离。
 """
 
 from __future__ import annotations
@@ -180,7 +188,7 @@ QNAS = [
 ]
 
 
-def seed_es(es_url: str) -> None:
+def seed_es(es_url: str, es_user: str = "", es_password: str = "") -> None:
     try:
         from elasticsearch import Elasticsearch
     except ImportError:
@@ -188,13 +196,37 @@ def seed_es(es_url: str) -> None:
         return
 
     print("\n===== ES 注入开始 =====")
-    es = Elasticsearch(es_url)
+
+    # 构建连接参数
+    es_kwargs = dict(
+        verify_certs=False,
+        ssl_show_warn=False,
+        request_timeout=30,
+    )
+    if es_user and es_password:
+        es_kwargs["basic_auth"] = (es_user, es_password)
+
+    es = Elasticsearch(es_url, **es_kwargs)
+
+    # 先检测连通性和版本
+    try:
+        info = es.info()
+        version = info.get("version", {}).get("number", "unknown")
+        cluster = info.get("cluster_name", "unknown")
+        print(f"  连接成功: cluster={cluster}, version={version}")
+    except Exception as e:
+        print(f"  [!] 无法连接 ES: {e}")
+        print("  提示: ES 8.x 默认开启安全认证，可能需要:")
+        print("    1. 使用 https:// 而非 http://")
+        print("    2. 提供 --es-user 和 --es-password 参数")
+        print("    3. 或在 elasticsearch.yml 中关闭 xpack.security.enabled")
+        return
 
     # article 索引
     if es.indices.exists(index="article"):
         es.indices.delete(index="article")
         print("  删除旧 article 索引")
-    es.indices.create(index="article", body=ARTICLE_MAPPING)
+    es.indices.create(index="article", mappings=ARTICLE_MAPPING["mappings"])
     print(f"  创建 article 索引，注入 {len(ARTICLES)} 条文档")
     for i, doc in enumerate(ARTICLES):
         es.index(index="article", id=i + 1, document=doc)
@@ -204,7 +236,7 @@ def seed_es(es_url: str) -> None:
     if es.indices.exists(index="qna"):
         es.indices.delete(index="qna")
         print("  删除旧 qna 索引")
-    es.indices.create(index="qna", body=QNA_MAPPING)
+    es.indices.create(index="qna", mappings=QNA_MAPPING["mappings"])
     print(f"  创建 qna 索引，注入 {len(QNAS)} 条问答")
     for i, doc in enumerate(QNAS):
         es.index(index="qna", id=i + 1, document=doc)
@@ -218,80 +250,80 @@ def seed_es(es_url: str) -> None:
 # ====================================================================== #
 
 NEO4J_CYPHER = """
-// 清空现有数据
-MATCH (n) DETACH DELETE n;
+// 仅清理本脚本注入的节点（通过专属标签 QnaSeed 过滤，绝不影响其他数据）
+MATCH (n:QnaSeed) DETACH DELETE n;
 
-// ===== 节点：模型 =====
-CREATE (dsv3:Model {name: 'DeepSeek-V3', type: '开源', params: '671B', architecture: 'MoE'})
-CREATE (dsv4:Model {name: 'DeepSeek-V4-Flash', type: '开源', params: '671B', architecture: 'MoE'})
-CREATE (gpt4:Model {name: 'GPT-4', type: '闭源', params: '未知', architecture: 'Transformer'})
-CREATE (gpt4o:Model {name: 'GPT-4o', type: '闭源', params: '未知', architecture: 'Transformer'})
-CREATE (llama:Model {name: 'LLaMA-3', type: '开源', params: '70B', architecture: 'Transformer'})
-CREATE (glm:Model {name: 'GLM-4', type: '开源', params: '130B', architecture: 'Transformer'})
+// ===== 节点：模型（均打上 QnaSeed 专属标签）=====
+CREATE (dsv3:QnaSeed:Model {name: 'DeepSeek-V3', type: '开源', params: '671B', architecture: 'MoE'});
+CREATE (dsv4:QnaSeed:Model {name: 'DeepSeek-V4-Flash', type: '开源', params: '671B', architecture: 'MoE'});
+CREATE (gpt4:QnaSeed:Model {name: 'GPT-4', type: '闭源', params: '未知', architecture: 'Transformer'});
+CREATE (gpt4o:QnaSeed:Model {name: 'GPT-4o', type: '闭源', params: '未知', architecture: 'Transformer'});
+CREATE (llama:QnaSeed:Model {name: 'LLaMA-3', type: '开源', params: '70B', architecture: 'Transformer'});
+CREATE (glm:QnaSeed:Model {name: 'GLM-4', type: '开源', params: '130B', architecture: 'Transformer'});
 
 // ===== 节点：公司 =====
-CREATE (ds:Company {name: 'DeepSeek', founded: '2023'})
-CREATE (openai:Company {name: 'OpenAI', founded: '2015'})
-CREATE (meta:Company {name: 'Meta', founded: '2004'})
-CREATE (zhipu:Company {name: '智谱AI', founded: '2019'})
+CREATE (ds:QnaSeed:Company {name: 'DeepSeek', founded: '2023'});
+CREATE (openai:QnaSeed:Company {name: 'OpenAI', founded: '2015'});
+CREATE (meta:QnaSeed:Company {name: 'Meta', founded: '2004'});
+CREATE (zhipu:QnaSeed:Company {name: '智谱AI', founded: '2019'});
 
 // ===== 节点：技术概念 =====
-CREATE (rag:Concept {name: 'RAG', description: '检索增强生成'})
-CREATE (ft:Concept {name: 'Fine-tuning', description: '模型微调技术'})
-CREATE (emb:Concept {name: 'Embedding', description: '文本向量化'})
-CREATE (kg:Concept {name: 'KnowledgeGraph', description: '知识图谱'})
-CREATE (vec:Concept {name: 'VectorSearch', description: '向量检索'})
-CREATE (rerank:Concept {name: 'Rerank', description: '重排序融合'})
-CREATE (moe:Concept {name: 'MoE', description: '混合专家架构'})
-CREATE (sft:Concept {name: 'SFT', description: '指令微调'})
-CREATE (lora:Concept {name: 'LoRA', description: '低秩适配微调'})
+CREATE (rag:QnaSeed:Concept {name: 'RAG', description: '检索增强生成'});
+CREATE (ft:QnaSeed:Concept {name: 'Fine-tuning', description: '模型微调技术'});
+CREATE (emb:QnaSeed:Concept {name: 'Embedding', description: '文本向量化'});
+CREATE (kg:QnaSeed:Concept {name: 'KnowledgeGraph', description: '知识图谱'});
+CREATE (vec:QnaSeed:Concept {name: 'VectorSearch', description: '向量检索'});
+CREATE (rerank:QnaSeed:Concept {name: 'Rerank', description: '重排序融合'});
+CREATE (moe:QnaSeed:Concept {name: 'MoE', description: '混合专家架构'});
+CREATE (sft:QnaSeed:Concept {name: 'SFT', description: '指令微调'});
+CREATE (lora:QnaSeed:Concept {name: 'LoRA', description: '低秩适配微调'});
 
 // ===== 节点：框架/工具 =====
-CREATE (milvus:Tool {name: 'Milvus', description: '向量数据库'})
-CREATE (neo4j:Tool {name: 'Neo4j', description: '图数据库'})
-CREATE (es:Tool {name: 'Elasticsearch', description: '搜索引擎'})
-CREATE (fastapi:Tool {name: 'FastAPI', description: 'Python Web 框架'})
-CREATE (cohere:Tool {name: 'Cohere', description: 'Rerank API 服务'})
+CREATE (milvus:QnaSeed:Tool {name: 'Milvus', description: '向量数据库'});
+CREATE (neo4j:QnaSeed:Tool {name: 'Neo4j', description: '图数据库'});
+CREATE (es:QnaSeed:Tool {name: 'Elasticsearch', description: '搜索引擎'});
+CREATE (fastapi:QnaSeed:Tool {name: 'FastAPI', description: 'Python Web 框架'});
+CREATE (cohere:QnaSeed:Tool {name: 'Cohere', description: 'Rerank API 服务'});
 
 // ===== 关系：公司 develops 模型 =====
-MATCH (ds:Company {name:'DeepSeek'}), (dsv3:Model {name:'DeepSeek-V3'}) CREATE (ds)-[:develops]->(dsv3);
-MATCH (ds:Company {name:'DeepSeek'}), (dsv4:Model {name:'DeepSeek-V4-Flash'}) CREATE (ds)-[:develops]->(dsv4);
-MATCH (openai:Company {name:'OpenAI'}), (gpt4:Model {name:'GPT-4'}) CREATE (openai)-[:develops]->(gpt4);
-MATCH (openai:Company {name:'OpenAI'}), (gpt4o:Model {name:'GPT-4o'}) CREATE (openai)-[:develops]->(gpt4o);
-MATCH (meta:Company {name:'Meta'}), (llama:Model {name:'LLaMA-3'}) CREATE (meta)-[:develops]->(llama);
-MATCH (zhipu:Company {name:'智谱AI'}), (glm:Model {name:'GLM-4'}) CREATE (zhipu)-[:develops]->(glm);
+MATCH (ds:QnaSeed:Company {name:'DeepSeek'}), (dsv3:QnaSeed:Model {name:'DeepSeek-V3'}) CREATE (ds)-[:develops]->(dsv3);
+MATCH (ds:QnaSeed:Company {name:'DeepSeek'}), (dsv4:QnaSeed:Model {name:'DeepSeek-V4-Flash'}) CREATE (ds)-[:develops]->(dsv4);
+MATCH (openai:QnaSeed:Company {name:'OpenAI'}), (gpt4:QnaSeed:Model {name:'GPT-4'}) CREATE (openai)-[:develops]->(gpt4);
+MATCH (openai:QnaSeed:Company {name:'OpenAI'}), (gpt4o:QnaSeed:Model {name:'GPT-4o'}) CREATE (openai)-[:develops]->(gpt4o);
+MATCH (meta:QnaSeed:Company {name:'Meta'}), (llama:QnaSeed:Model {name:'LLaMA-3'}) CREATE (meta)-[:develops]->(llama);
+MATCH (zhipu:QnaSeed:Company {name:'智谱AI'}), (glm:QnaSeed:Model {name:'GLM-4'}) CREATE (zhipu)-[:develops]->(glm);
 
 // ===== 关系：模型 competes_with 模型 =====
-MATCH (dsv3:Model {name:'DeepSeek-V3'}), (gpt4:Model {name:'GPT-4'}) CREATE (dsv3)-[:competes_with]->(gpt4);
-MATCH (dsv4:Model {name:'DeepSeek-V4-Flash'}), (gpt4o:Model {name:'GPT-4o'}) CREATE (dsv4)-[:competes_with]->(gpt4o);
-MATCH (llama:Model {name:'LLaMA-3'}), (gpt4:Model {name:'GPT-4'}) CREATE (llama)-[:competes_with]->(gpt4);
-MATCH (glm:Model {name:'GLM-4'}), (gpt4:Model {name:'GPT-4'}) CREATE (glm)-[:competes_with]->(gpt4);
+MATCH (dsv3:QnaSeed:Model {name:'DeepSeek-V3'}), (gpt4:QnaSeed:Model {name:'GPT-4'}) CREATE (dsv3)-[:competes_with]->(gpt4);
+MATCH (dsv4:QnaSeed:Model {name:'DeepSeek-V4-Flash'}), (gpt4o:QnaSeed:Model {name:'GPT-4o'}) CREATE (dsv4)-[:competes_with]->(gpt4o);
+MATCH (llama:QnaSeed:Model {name:'LLaMA-3'}), (gpt4:QnaSeed:Model {name:'GPT-4'}) CREATE (llama)-[:competes_with]->(gpt4);
+MATCH (glm:QnaSeed:Model {name:'GLM-4'}), (gpt4:QnaSeed:Model {name:'GPT-4'}) CREATE (glm)-[:competes_with]->(gpt4);
 
 // ===== 关系：模型 uses_architecture 概念 =====
-MATCH (dsv3:Model {name:'DeepSeek-V3'}), (moe:Concept {name:'MoE'}) CREATE (dsv3)-[:uses_architecture]->(moe);
-MATCH (dsv4:Model {name:'DeepSeek-V4-Flash'}), (moe:Concept {name:'MoE'}) CREATE (dsv4)-[:uses_architecture]->(moe);
+MATCH (dsv3:QnaSeed:Model {name:'DeepSeek-V3'}), (moe:QnaSeed:Concept {name:'MoE'}) CREATE (dsv3)-[:uses_architecture]->(moe);
+MATCH (dsv4:QnaSeed:Model {name:'DeepSeek-V4-Flash'}), (moe:QnaSeed:Concept {name:'MoE'}) CREATE (dsv4)-[:uses_architecture]->(moe);
 
 // ===== 关系：概念 related_to 概念 =====
-MATCH (rag:Concept {name:'RAG'}), (emb:Concept {name:'Embedding'}) CREATE (rag)-[:uses]->(emb);
-MATCH (rag:Concept {name:'RAG'}), (vec:Concept {name:'VectorSearch'}) CREATE (rag)-[:uses]->(vec);
-MATCH (rag:Concept {name:'RAG'}), (kg:Concept {name:'KnowledgeGraph'}) CREATE (rag)-[:uses]->(kg);
-MATCH (rag:Concept {name:'RAG'}), (rerank:Concept {name:'Rerank'}) CREATE (rag)-[:uses]->(rerank);
-MATCH (ft:Concept {name:'Fine-tuning'}), (sft:Concept {name:'SFT'}) CREATE (ft)-[:includes]->(sft);
-MATCH (ft:Concept {name:'Fine-tuning'}), (lora:Concept {name:'LoRA'}) CREATE (ft)-[:includes]->(lora);
-MATCH (vec:Concept {name:'VectorSearch'}), (emb:Concept {name:'Embedding'}) CREATE (vec)-[:depends_on]->(emb);
-MATCH (kg:Concept {name:'KnowledgeGraph'}), (vec:Concept {name:'VectorSearch'}) CREATE (kg)-[:complement_to]->(vec);
-MATCH (rerank:Concept {name:'Rerank'}), (rag:Concept {name:'RAG'}) CREATE (rerank)-[:used_in]->(rag);
+MATCH (rag:QnaSeed:Concept {name:'RAG'}), (emb:QnaSeed:Concept {name:'Embedding'}) CREATE (rag)-[:uses]->(emb);
+MATCH (rag:QnaSeed:Concept {name:'RAG'}), (vec:QnaSeed:Concept {name:'VectorSearch'}) CREATE (rag)-[:uses]->(vec);
+MATCH (rag:QnaSeed:Concept {name:'RAG'}), (kg:QnaSeed:Concept {name:'KnowledgeGraph'}) CREATE (rag)-[:uses]->(kg);
+MATCH (rag:QnaSeed:Concept {name:'RAG'}), (rerank:QnaSeed:Concept {name:'Rerank'}) CREATE (rag)-[:uses]->(rerank);
+MATCH (ft:QnaSeed:Concept {name:'Fine-tuning'}), (sft:QnaSeed:Concept {name:'SFT'}) CREATE (ft)-[:includes]->(sft);
+MATCH (ft:QnaSeed:Concept {name:'Fine-tuning'}), (lora:QnaSeed:Concept {name:'LoRA'}) CREATE (ft)-[:includes]->(lora);
+MATCH (vec:QnaSeed:Concept {name:'VectorSearch'}), (emb:QnaSeed:Concept {name:'Embedding'}) CREATE (vec)-[:depends_on]->(emb);
+MATCH (kg:QnaSeed:Concept {name:'KnowledgeGraph'}), (vec:QnaSeed:Concept {name:'VectorSearch'}) CREATE (kg)-[:complement_to]->(vec);
+MATCH (rerank:QnaSeed:Concept {name:'Rerank'}), (rag:QnaSeed:Concept {name:'RAG'}) CREATE (rerank)-[:used_in]->(rag);
 
 // ===== 关系：工具 used_by 概念 =====
-MATCH (milvus:Tool {name:'Milvus'}), (vec:Concept {name:'VectorSearch'}) CREATE (milvus)-[:implements]->(vec);
-MATCH (neo4j:Tool {name:'Neo4j'}), (kg:Concept {name:'KnowledgeGraph'}) CREATE (neo4j)-[:implements]->(kg);
-MATCH (es:Tool {name:'Elasticsearch'}), (rag:Concept {name:'RAG'}) CREATE (es)-[:used_in]->(rag);
-MATCH (fastapi:Tool {name:'FastAPI'}), (rag:Concept {name:'RAG'}) CREATE (fastapi)-[:used_in]->(rag);
-MATCH (cohere:Tool {name:'Cohere'}), (rerank:Concept {name:'Rerank'}) CREATE (cohere)-[:implements]->(rerank);
+MATCH (milvus:QnaSeed:Tool {name:'Milvus'}), (vec:QnaSeed:Concept {name:'VectorSearch'}) CREATE (milvus)-[:implements]->(vec);
+MATCH (neo4j:QnaSeed:Tool {name:'Neo4j'}), (kg:QnaSeed:Concept {name:'KnowledgeGraph'}) CREATE (neo4j)-[:implements]->(kg);
+MATCH (es:QnaSeed:Tool {name:'Elasticsearch'}), (rag:QnaSeed:Concept {name:'RAG'}) CREATE (es)-[:used_in]->(rag);
+MATCH (fastapi:QnaSeed:Tool {name:'FastAPI'}), (rag:QnaSeed:Concept {name:'RAG'}) CREATE (fastapi)-[:used_in]->(rag);
+MATCH (cohere:QnaSeed:Tool {name:'Cohere'}), (rerank:QnaSeed:Concept {name:'Rerank'}) CREATE (cohere)-[:implements]->(rerank);
 """
 
 
-def seed_neo4j(uri: str, user: str, password: str, database: str) -> None:
+def seed_neo4j(uri: str, user: str, password: str, database: str, create_db: bool = False) -> None:
     try:
         from neo4j import GraphDatabase
     except ImportError:
@@ -301,9 +333,36 @@ def seed_neo4j(uri: str, user: str, password: str, database: str) -> None:
     print("\n===== Neo4j 注入开始 =====")
     driver = GraphDatabase.driver(uri, auth=(user, password))
 
+    # 连通性检测
+    try:
+        driver.verify_connectivity()
+    except Exception as exc:
+        print(f"  [!] 无法连接 Neo4j: {exc}")
+        driver.close()
+        return
+
+    # 可选：创建新 database（仅 Enterprise Edition 支持）
+    if create_db and database != "neo4j":
+        with driver.session(database="system") as session:
+            try:
+                session.run(f"CREATE DATABASE `{database}` IF NOT EXISTS")
+                print(f"  创建/确认 database: {database}")
+            except Exception as exc:
+                print(f"  [!] 创建 database 失败（可能为 Community 版不支持多 database）: {exc}")
+                print(f"  将使用默认 neo4j database")
+                database = "neo4j"
+
+    # 安全确认：显示目标 database 和已有数据量
+    with driver.session(database=database) as session:
+        existing_nodes = session.run("MATCH (n) RETURN count(n) AS c").single()["c"]
+        existing_rels = session.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
+    print(f"  目标 database: {database}")
+    print(f"  当前已有数据: {existing_nodes} 个节点, {existing_rels} 条关系")
+    print(f"  本脚本仅删除带 QnaSeed 标签的节点，不影响其他数据。")
+
     # 按分号拆分逐条执行
     statements = [s.strip() for s in NEO4J_CYPHER.split(";") if s.strip()]
-    print(f"  共 {len(statements)} 条 Cypher 语句")
+    print(f"  共 {len(statements)} 条 Cypher 语句，开始执行...")
 
     with driver.session(database=database) as session:
         for i, stmt in enumerate(statements, 1):
@@ -313,7 +372,7 @@ def seed_neo4j(uri: str, user: str, password: str, database: str) -> None:
     with driver.session(database=database) as session:
         nodes = session.run("MATCH (n) RETURN count(n) AS c").single()["c"]
         rels = session.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
-    print(f"  注入完成: {nodes} 个节点, {rels} 条关系")
+    print(f"  注入完成: 当前 database 共 {nodes} 个节点, {rels} 条关系")
 
     driver.close()
     print("===== Neo4j 注入完成 =====\n")
@@ -390,10 +449,13 @@ def seed_milvus(uri: str, collection: str, embedding_base: str, embedding_key: s
 def main():
     parser = argparse.ArgumentParser(description="Smart QnA 测试数据注入")
     parser.add_argument("--es-url", default="http://localhost:9200", help="ES 地址")
+    parser.add_argument("--es-user", default="", help="ES 用户名（ES 8.x 安全认证）")
+    parser.add_argument("--es-password", default="", help="ES 密码（ES 8.x 安全认证）")
     parser.add_argument("--neo4j-uri", default="bolt://localhost:7687", help="Neo4j 地址")
     parser.add_argument("--neo4j-user", default="neo4j", help="Neo4j 用户名")
     parser.add_argument("--neo4j-password", default="", help="Neo4j 密码")
-    parser.add_argument("--neo4j-database", default="neo4j", help="Neo4j 数据库名")
+    parser.add_argument("--neo4j-database", default="neo4j", help="Neo4j 数据库名（建议用独立 database 隔离数据）")
+    parser.add_argument("--neo4j-create-db", action="store_true", help="自动创建新 database（仅 Enterprise 版支持）")
     parser.add_argument("--milvus-uri", default="http://localhost:19530", help="Milvus 地址")
     parser.add_argument("--milvus-collection", default="documents", help="Milvus collection 名")
     parser.add_argument("--embedding-base", default="", help="Embedding API 地址")
@@ -407,13 +469,13 @@ def main():
     do_all = not (args.es_only or args.neo4j_only or args.milvus_only)
 
     if do_all or args.es_only:
-        seed_es(args.es_url)
+        seed_es(args.es_url, args.es_user, args.es_password)
 
     if do_all or args.neo4j_only:
         if not args.neo4j_password:
             print("[!] 未提供 --neo4j-password，跳过 Neo4j 注入")
         else:
-            seed_neo4j(args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database)
+            seed_neo4j(args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_database, args.neo4j_create_db)
 
     if do_all or args.milvus_only:
         seed_milvus(

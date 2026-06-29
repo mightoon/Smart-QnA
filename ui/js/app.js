@@ -218,13 +218,17 @@
     ]},
     elasticsearch: { title: "Elasticsearch", fields: [
       { key: "name", label: "配置名称", type: "text" },
+      { key: "version", label: "ES 版本", type: "select", options: [
+        { value: "v8", label: "v8" },
+        { value: "v7", label: "v7" },
+      ]},
       { key: "url", label: "URL", type: "text" },
-      { key: "username", label: "Username", type: "text" },
-      { key: "password", label: "Password", type: "password", sensitive: true },
+      { key: "username", label: "Username（无认证可留空）", type: "text" },
+      { key: "password", label: "Password（无认证可留空）", type: "password", sensitive: true },
       { key: "article_index", label: "Article Index", type: "text" },
-      { key: "article_fields", label: "Article 字段映射 (JSON: {body, title})", type: "text" },
+      { key: "article_fields", label: "Article 字段映射", type: "fieldsmapping" },
       { key: "qna_index", label: "QnA Index", type: "text" },
-      { key: "qna_fields", label: "QnA 字段映射 (JSON: {body, title})", type: "text" },
+      { key: "qna_fields", label: "QnA 字段映射", type: "fieldsmapping" },
       { key: "verify_certs", label: "Verify Certs", type: "checkbox" },
     ]},
     neo4j: { title: "Neo4j 图数据库", fields: [
@@ -364,7 +368,19 @@
     let html = '<div class="form-grid">';
     fields.forEach((f) => {
       const val = existing ? existing[f.key] : "";
-      if (f.type === "checkbox") {
+      if (f.type === "select") {
+        const opts = (f.options || []).map((o) =>
+          '<option value="' + esc(o.value) + '"' + (val === o.value ? " selected" : "") + ">" + esc(o.label) + "</option>"
+        ).join("");
+        html += '<label>' + esc(f.label) + '<select name="' + f.key + '">' + opts + '</select></label>';
+      } else if (f.type === "fieldsmapping") {
+        const bodyVal = (val && val.body) || "";
+        const titleVal = (val && val.title) || "";
+        html += '<fieldset class="field-mapping"><legend>' + esc(f.label) + '</legend>' +
+          '<label>正文内容字段<input name="' + f.key + '.body" type="text" value="' + esc(bodyVal) + '" /></label>' +
+          '<label>标题字段<input name="' + f.key + '.title" type="text" value="' + esc(titleVal) + '" /></label>' +
+          '</fieldset>';
+      } else if (f.type === "checkbox") {
         html += '<label class="checkbox"><input name="' + f.key + '" type="checkbox" ' +
           (val ? "checked" : "") + " /> " + esc(f.label) + "</label>";
       } else {
@@ -391,12 +407,21 @@
 
   function collectForm(editor) {
     const data = {};
-    editor.querySelectorAll("input").forEach((el) => {
+    editor.querySelectorAll("input, select").forEach((el) => {
       const name = el.getAttribute("name");
       if (!name) return;
-      if (el.type === "checkbox") data[name] = el.checked;
-      else if (el.type === "number") data[name] = el.value === "" ? "" : Number(el.value);
-      else data[name] = el.value;
+      let value;
+      if (el.type === "checkbox") value = el.checked;
+      else if (el.type === "number") value = el.value === "" ? "" : Number(el.value);
+      else value = el.value;
+
+      if (name.includes(".")) {
+        const [parent, child] = name.split(".", 2);
+        if (!data[parent]) data[parent] = {};
+        data[parent][child] = value;
+      } else {
+        data[name] = value;
+      }
     });
     return data;
   }

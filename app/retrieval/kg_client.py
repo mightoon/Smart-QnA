@@ -24,6 +24,19 @@ from app.schemas.responses import SourceItem
 _DEFAULT_EXCLUDED_RELATIONS = ["contains", "references"]
 
 
+def _normalize_excluded_relations(value: Any) -> list[str]:
+    """将 excluded_relations 规范化为字符串列表。
+
+    兼容三种输入：列表、逗号分隔字符串、None。
+    """
+    if not value:
+        return list(_DEFAULT_EXCLUDED_RELATIONS)
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    # 字符串：按逗号拆分
+    return [s.strip() for s in str(value).split(",") if s.strip()]
+
+
 def _build_query(node_key: str, max_neighbors: int) -> str:
     """动态构建 Cypher 查询模板。
 
@@ -56,8 +69,8 @@ class KGClient:
         self.database = kg_config.get("database", "neo4j")
         self.node_key = kg_config.get("node_key", "name")
         self.max_neighbors = int(kg_config.get("max_neighbors", 10))
-        self.excluded_relations = kg_config.get(
-            "excluded_relations", _DEFAULT_EXCLUDED_RELATIONS
+        self.excluded_relations = _normalize_excluded_relations(
+            kg_config.get("excluded_relations", _DEFAULT_EXCLUDED_RELATIONS)
         )
         self._driver: Any = None
 
@@ -84,8 +97,8 @@ class KGClient:
         self.database = kg_config.get("database", "neo4j")
         self.node_key = kg_config.get("node_key", "name")
         self.max_neighbors = int(kg_config.get("max_neighbors", 10))
-        self.excluded_relations = kg_config.get(
-            "excluded_relations", _DEFAULT_EXCLUDED_RELATIONS
+        self.excluded_relations = _normalize_excluded_relations(
+            kg_config.get("excluded_relations", _DEFAULT_EXCLUDED_RELATIONS)
         )
         self._driver = None
 
