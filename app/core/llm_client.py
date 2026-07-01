@@ -40,6 +40,24 @@ CHAT_SYSTEM_PROMPT = (
 )
 
 
+def _parse_extra(value: object) -> dict:
+    """将 extra 字段解析为 dict，兼容字符串（JSON）和 dict 输入。"""
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return {}
+        try:
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 class LLMClient:
     """大模型调用客户端（异步）。"""
 
@@ -48,18 +66,22 @@ class LLMClient:
         self.api_key = llm_config.get("api_key", "")
         self.model = llm_config.get("model", "gpt-4o-mini")
         self.entity_model = llm_config.get("entity_model", self.model)
-        self.temperature = float(llm_config.get("temperature", 0.7))
-        self.max_tokens = int(llm_config.get("max_tokens", 2048))
+        # temperature / max_tokens 允许空值，空时用默认值
+        _temp = llm_config.get("temperature", 0.7)
+        self.temperature = float(_temp) if _temp != "" and _temp is not None else 0.7
+        _max_tok = llm_config.get("max_tokens", 2048)
+        self.max_tokens = int(_max_tok) if _max_tok != "" and _max_tok is not None else 2048
+        # extra: 附加调用参数（JSON 对象），支持字符串或 dict 输入
+        self.extra = _parse_extra(llm_config.get("extra"))
         self._client: Optional[AsyncOpenAI] = None
 
     # ------------------------------------------------------------------ #
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            if not self.api_key:
-                raise LLMError("LLM api_key 未配置")
+            # 本地模型可能无需 api_key，传占位值满足 SDK 要求
             self._client = AsyncOpenAI(
-                api_key=self.api_key,
+                api_key=self.api_key or "not-needed",
                 base_url=self.api_base or None,
             )
         return self._client
@@ -70,8 +92,11 @@ class LLMClient:
         self.api_key = llm_config.get("api_key", "")
         self.model = llm_config.get("model", "gpt-4o-mini")
         self.entity_model = llm_config.get("entity_model", self.model)
-        self.temperature = float(llm_config.get("temperature", 0.7))
-        self.max_tokens = int(llm_config.get("max_tokens", 2048))
+        _temp = llm_config.get("temperature", 0.7)
+        self.temperature = float(_temp) if _temp != "" and _temp is not None else 0.7
+        _max_tok = llm_config.get("max_tokens", 2048)
+        self.max_tokens = int(_max_tok) if _max_tok != "" and _max_tok is not None else 2048
+        self.extra = _parse_extra(llm_config.get("extra"))
         self._client = None
 
     # ------------------------------------------------------------------ #
@@ -79,8 +104,6 @@ class LLMClient:
     # ------------------------------------------------------------------ #
     async def validate(self) -> dict:
         """发起一次极小请求验证模型可用性，返回 {ok, message}。"""
-        if not self.api_key:
-            return {"ok": False, "message": "api_key 未配置"}
         try:
             await self.client.chat.completions.create(
                 model=self.model,
@@ -88,6 +111,7 @@ class LLMClient:
                 max_tokens=8,
                 temperature=0,
                 stream=False,
+                extra_body=self.extra or None,
             )
             return {"ok": True, "message": f"模型可用: {self.model} @ {self.api_base or '默认'}"}
         except Exception as exc:  # noqa: BLE001
@@ -111,10 +135,13 @@ class LLMClient:
             "max_tokens": self.max_tokens,
             "stream": True,
         }
+        # 附加参数（如 chat_template_kwargs）通过 extra_body 传递，
+        # 避免被 SDK 的 create() 方法签名校验拒绝
+        extra_body = self.extra or None
         self._log_request("stream_chat", body)
         async with measure("llm", "stream_chat"):
             try:
-                stream = await self.client.chat.completions.create(**body)
+                stream = await self.client.chat.completions.create(**body, extra_body=extra_body)
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
@@ -155,10 +182,11 @@ class LLMClient:
             "max_tokens": 256,
             "stream": False,
         }
+        extra_body = self.extra or None
         self._log_request("extract_entities", body)
         async with measure("llm", "extract_entities") as m:
             try:
-                resp = await self.client.chat.completions.create(**body)
+                resp = await self.client.chat.completions.create(**body, extra_body=extra_body)
                 m["tokens"] = resp.usage.total_tokens if resp.usage else 0
                 text = resp.choices[0].message.content or ""
             except OpenAIError as exc:

@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY ui/ ./ui/
 COPY data/ ./data/
+COPY tests/ ./tests/
+COPY client_demo.py/ .
 
 EXPOSE 8000
 

@@ -210,11 +210,12 @@
     llm: { title: "大模型 (LLM)", fields: [
       { key: "name", label: "配置名称", type: "text" },
       { key: "api_base", label: "API Base", type: "text" },
-      { key: "api_key", label: "API Key", type: "password", sensitive: true },
+      { key: "api_key", label: "API Key（本地模型可留空）", type: "password", sensitive: true },
       { key: "model", label: "Model", type: "text" },
       { key: "entity_model", label: "Entity Model", type: "text" },
-      { key: "temperature", label: "Temperature", type: "number" },
-      { key: "max_tokens", label: "Max Tokens", type: "number" },
+      { key: "temperature", label: "Temperature（留空默认 0.7）", type: "number" },
+      { key: "max_tokens", label: "Max Tokens（留空默认 2048）", type: "number" },
+      { key: "extra", label: "附加参数 (JSON，如 chat_template_kwargs)", type: "textarea" },
     ]},
     elasticsearch: { title: "Elasticsearch", fields: [
       { key: "name", label: "配置名称", type: "text" },
@@ -380,6 +381,11 @@
           '<label>正文内容字段<input name="' + f.key + '.body" type="text" value="' + esc(bodyVal) + '" /></label>' +
           '<label>标题字段<input name="' + f.key + '.title" type="text" value="' + esc(titleVal) + '" /></label>' +
           '</fieldset>';
+      } else if (f.type === "textarea") {
+        // extra 等复杂 JSON 字段：dict -> JSON 字符串展示，空则空串
+        const displayVal = (val && typeof val === "object") ? JSON.stringify(val, null, 2) : (val || "");
+        html += '<label class="textarea-field">' + esc(f.label) +
+          '<textarea name="' + f.key + '" rows="4" placeholder="可选，JSON 格式">' + esc(displayVal) + '</textarea></label>';
       } else if (f.type === "checkbox") {
         html += '<label class="checkbox"><input name="' + f.key + '" type="checkbox" ' +
           (val ? "checked" : "") + " /> " + esc(f.label) + "</label>";
@@ -407,7 +413,7 @@
 
   function collectForm(editor) {
     const data = {};
-    editor.querySelectorAll("input, select").forEach((el) => {
+    editor.querySelectorAll("input, select, textarea").forEach((el) => {
       const name = el.getAttribute("name");
       if (!name) return;
       let value;
