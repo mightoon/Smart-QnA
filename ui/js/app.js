@@ -47,17 +47,50 @@
   const messages = $("#messages");
   const queryInput = $("#queryInput");
   const sendBtn = $("#sendBtn");
+  const stopBtn = $("#stopBtn");
   const clearBtn = $("#clearBtn");
   const sourceList = $("#sourceList");
   const apiCall = $("#apiCall");
 
+  // 流式请求的 AbortController（用于终止输出）
+  let currentAbortController = null;
+
   function addMsg(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + role;
-    div.textContent = text;
+    if (role === "assistant") {
+      // assistant 消息用 .msg-content 子元素承载内容，便于 markdown 渲染
+      const content = document.createElement("div");
+      content.className = "msg-content";
+      content.textContent = text;
+      div.appendChild(content);
+    } else {
+      div.textContent = text;
+    }
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
     return div;
+  }
+
+  // markdown 渲染（marked 已在 index.html 引入）
+  function renderMarkdown(text) {
+    if (typeof marked !== "undefined") {
+      try { return marked.parse(text); } catch (e) { }
+    }
+    return esc(text).replace(/\n/g, "<br>");
+  }
+
+  // 更新 assistant 消息内容（支持 markdown）
+  function setMsgContent(msgDiv, text) {
+    const content = msgDiv.querySelector(".msg-content");
+    if (content) content.innerHTML = renderMarkdown(text);
+    else msgDiv.innerHTML = renderMarkdown(text);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  // 流式追加 token 到指定消息
+  function appendTokenToMsg(msgDiv, buf) {
+    setMsgContent(msgDiv, buf);
   }
 
   function renderSources(sources) {
@@ -95,7 +128,8 @@
     const reqBody = { query, mode: mode || null, top_k, stream };
     addMsg("user", query);
     queryInput.value = "";
-    sendBtn.disabled = true;
+    sendBtn.hidden = true;
+    stopBtn.hidden = false;
     sourceList.textContent = "检索中…";
     apiCall.textContent = "—";
     renderApiCall(reqBody);
@@ -105,7 +139,18 @@
     } else {
       await blockingChat(reqBody);
     }
-    sendBtn.disabled = false;
+    stopBtn.hidden = true;
+    sendBtn.hidden = false;
+  });
+
+  // 停止按钮：终止当前流式请求
+  stopBtn.addEventListener("click", () => {
+    if (currentAbortController) {
+      currentAbortController.abort();
+      currentAbortController = null;
+    }
+    stopBtn.hidden = true;
+    sendBtn.hidden = false;
   });
 
   clearBtn.addEventListener("click", () => {
@@ -126,41 +171,102 @@
     const assistant = addMsg("assistant", "");
     let buf = "";
     let pending = "";
+    // all 模式下按 section 分块显示
+    const sectionMsgs = {};  // section -> { msg, buf }
+    let currentMsg = assistant;
+    // 累积所有路的来源（all 模式下三路来源都展示）
+    let allSources = [];
 
-    const resp = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify(reqBody),
-    });
+    // 创建 AbortController 用于终止请求
+    currentAbortController = new AbortController();
+
+    let resp;
+    try {
+      resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(reqBody),
+        signal: currentAbortController.signal,
+      });
+    } catch (e) {
+      if (e.name === "AbortError") {
+        setMsgContent(assistant, buf || "(已停止)");
+      } else {
+        addMsg("error", "请求失败：" + e.message);
+      }
+      currentAbortController = null;
+      return;
+    }
 
     if (!resp.ok || !resp.body) {
       addMsg("error", "请求失败：" + resp.status);
+      currentAbortController = null;
       return;
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += decoder.decode(value, { stream: true });
-      const blocks = pending.split("\n\n");
-      pending = blocks.pop();
-      for (const block of blocks) {
-        handleEvent(block, {
-          onMeta: (data) => renderSources(data.sources),
-          onToken: (data) => {
-            buf += data.content;
-            assistant.textContent = buf;
-            messages.scrollTop = messages.scrollHeight;
-          },
-          onError: (data) => addMsg("error", "错误：" + (data.error?.message || "未知")),
-          onDone: () => {
-            if (!buf) assistant.textContent = "(空回复)";
-          },
-        });
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        const blocks = pending.split("\n\n");
+        pending = blocks.pop();
+        for (const block of blocks) {
+          handleEvent(block, {
+            onMeta: (data) => renderSources(data.sources),
+            onToken: (data) => {
+              if (data.section) {
+                const sec = sectionMsgs[data.section];
+                if (sec) {
+                  sec.buf += data.content;
+                  setMsgContent(sec.msg, sec.buf);
+                }
+              } else {
+                buf += data.content;
+                setMsgContent(currentMsg, buf);
+              }
+            },
+            onSectionStart: (data) => {
+              const msg = addMsg("assistant", "");
+              msg.classList.add("section-msg");
+              const header = document.createElement("div");
+              header.className = "section-header";
+              header.textContent = data.label || data.section;
+              msg.insertBefore(header, msg.firstChild);
+              sectionMsgs[data.section] = { msg, buf: "" };
+              // 累积来源并刷新右侧面板
+              if (data.sources && data.sources.length) {
+                allSources = allSources.concat(data.sources);
+                renderSources(allSources);
+              }
+            },
+            onSectionEnd: (data) => {
+              const sec = sectionMsgs[data.section];
+              if (sec) {
+                if (!sec.buf) setMsgContent(sec.msg, "(空回复)");
+              }
+            },
+            onError: (data) => addMsg("error", "错误：" + (data.error?.message || "未知")),
+            onDone: () => {
+              if (!buf && Object.keys(sectionMsgs).length === 0) setMsgContent(assistant, "(空回复)");
+            },
+          });
+        }
       }
+    } catch (e) {
+      if (e.name === "AbortError") {
+        // 用户主动终止，保留已输出的内容
+        if (!buf && Object.keys(sectionMsgs).length === 0) {
+          setMsgContent(assistant, "(已停止)");
+        }
+      } else {
+        addMsg("error", "流式读取异常：" + e.message);
+      }
+    } finally {
+      currentAbortController = null;
     }
   }
 
@@ -176,6 +282,8 @@
     try { data = JSON.parse(dataStr); } catch (e) { return; }
     if (event === "meta") cbs.onMeta(data);
     else if (event === "token") cbs.onToken(data);
+    else if (event === "section_start") cbs.onSectionStart(data);
+    else if (event === "section_end") cbs.onSectionEnd(data);
     else if (event === "error") cbs.onError(data);
     else if (event === "done") cbs.onDone(data);
   }
@@ -183,11 +291,13 @@
   // 非流式
   async function blockingChat(reqBody) {
     const assistant = addMsg("assistant", "思考中…");
+    currentAbortController = new AbortController();
     try {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reqBody),
+        signal: currentAbortController.signal,
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -195,11 +305,17 @@
         assistant.textContent = "错误：" + (data.error?.message || resp.status);
         return;
       }
-      assistant.textContent = data.answer || "(空回复)";
+      setMsgContent(assistant, data.answer || "(空回复)");
       renderSources(data.sources);
     } catch (e) {
-      assistant.className = "msg error";
-      assistant.textContent = "请求异常：" + e.message;
+      if (e.name === "AbortError") {
+        setMsgContent(assistant, "(已停止)");
+      } else {
+        assistant.className = "msg error";
+        assistant.textContent = "请求异常：" + e.message;
+      }
+    } finally {
+      currentAbortController = null;
     }
   }
 

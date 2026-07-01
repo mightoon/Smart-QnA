@@ -50,11 +50,14 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     async def run(self, request: ChatRequest) -> ChatResult:
         async with measure("chat", "request") as m:
-            sources, entities = await self._retrieve(request)
-            context = self._build_context(sources)
-            answer = await self.llm.chat(
-                query=request.query, context=context, history=self._history(request)
-            )
+            if request.mode == ChatMode.ALL:
+                answer, sources, entities = await self._run_all(request)
+            else:
+                sources, entities = await self._retrieve(request)
+                context = self._build_context(sources)
+                answer = await self.llm.chat(
+                    query=request.query, context=context, history=self._history(request)
+                )
             m["tokens"] = 0  # token 由 LLM 内部埋点记录
         return ChatResult(
             answer=answer,
@@ -68,6 +71,12 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     async def run_stream(self, request: ChatRequest) -> AsyncIterator[str]:
         async with measure("chat", "request"):
+            # all 模式：三路独立检索 + 独立 LLM 回答，依次流式输出
+            if request.mode == ChatMode.ALL:
+                async for event in self._run_stream_all(request):
+                    yield event
+                return
+
             sources, entities = await self._retrieve(request)
             context = self._build_context(sources)
 
@@ -117,6 +126,172 @@ class Orchestrator:
             sources = await self.kg.search_by_entities(entities, top_k)
 
         return sources, entities
+
+    # ------------------------------------------------------------------ #
+    # all 模式：三路独立检索 + 独立 LLM 回答
+    # ------------------------------------------------------------------ #
+    async def _run_all(self, request: ChatRequest) -> tuple[str, list[SourceItem], list[str]]:
+        """all 模式非流式：三路独立检索 + 独立 LLM 回答，拼接返回。"""
+        query = request.query
+        top_k = request.top_k
+        history = self._history(request)
+        entity_task = asyncio.create_task(self._safe_entities(query))
+
+        all_sources: list[SourceItem] = []
+        sections: list[str] = []
+        source_offset = 0
+
+        # Article
+        try:
+            srcs = await self.es.search_article(query, top_k)
+            all_sources.extend(srcs)
+            ctx = self._build_context(srcs, start_index=source_offset + 1)
+            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            sections.append(f"📖 文章检索 (Article)\n{ans}")
+            source_offset += len(srcs)
+        except Exception as exc:  # noqa: BLE001
+            sections.append(f"📖 文章检索 (Article)\n⚠️ 失败: {exc}")
+
+        # QnA
+        try:
+            srcs = await self.es.search_qna(query, top_k)
+            all_sources.extend(srcs)
+            ctx = self._build_context(srcs, start_index=source_offset + 1)
+            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            sections.append(f"💬 问答检索 (QnA)\n{ans}")
+            source_offset += len(srcs)
+        except Exception as exc:  # noqa: BLE001
+            sections.append(f"💬 问答检索 (QnA)\n⚠️ 失败: {exc}")
+
+        # KG
+        entities = await entity_task
+        try:
+            srcs = await self.kg.search_by_entities(entities, top_k)
+            all_sources.extend(srcs)
+            ctx = self._build_context(srcs, start_index=source_offset + 1)
+            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            sections.append(f"🔗 知识图谱 (KG)\n{ans}")
+        except Exception as exc:  # noqa: BLE001
+            sections.append(f"🔗 知识图谱 (KG)\n⚠️ 失败: {exc}")
+
+        return "\n\n---\n\n".join(sections), all_sources, entities
+
+    async def _run_stream_all(self, request: ChatRequest) -> AsyncIterator[str]:
+        """all 模式专用流式输出。
+
+        三路各自独立检索、独立构建上下文、独立调用 LLM 生成回答，
+        依次以 section_start → token... → section_end 事件流输出。
+        实体抽取在后台并行启动，article/qna 先行，kg 待实体就绪后执行。
+        """
+        query = request.query
+        top_k = request.top_k
+        history = self._history(request)
+
+        # 后台启动实体抽取（kg 路依赖）
+        entity_task = asyncio.create_task(self._safe_entities(query))
+        # 全局来源编号偏移，确保各路引用编号连续
+        source_offset = 0
+
+        try:
+            # ---- 1. Article 路 ----
+            article_sources_count = 0
+            async for event in self._stream_section(
+                "article", "📖 文章检索 (Article)",
+                lambda: self.es.search_article(query, top_k),
+                query, history,
+                start_index=source_offset + 1,
+            ):
+                # 从 section_start 事件中提取来源数量
+                if "section_start" in event:
+                    try:
+                        data_str = event.split("data: ", 1)[1].strip()
+                        data = json.loads(data_str)
+                        article_sources_count = len(data.get("sources", []))
+                    except Exception:  # noqa: BLE001
+                        pass
+                yield event
+            source_offset += article_sources_count
+
+            # ---- 2. QnA 路 ----
+            qna_sources_count = 0
+            async for event in self._stream_section(
+                "qna", "💬 问答检索 (QnA)",
+                lambda: self.es.search_qna(query, top_k),
+                query, history,
+                start_index=source_offset + 1,
+            ):
+                if "section_start" in event:
+                    try:
+                        data_str = event.split("data: ", 1)[1].strip()
+                        data = json.loads(data_str)
+                        qna_sources_count = len(data.get("sources", []))
+                    except Exception:  # noqa: BLE001
+                        pass
+                yield event
+            source_offset += qna_sources_count
+
+            # ---- 3. KG 路（等待实体抽取完成）----
+            entities = await entity_task
+            async for event in self._stream_section(
+                "kg", "🔗 知识图谱 (KG)",
+                lambda: self.kg.search_by_entities(entities, top_k),
+                query, history,
+                extra_meta={"entities": entities},
+                start_index=source_offset + 1,
+            ):
+                yield event
+
+            yield _sse("done", {})
+        finally:
+            # 用户终止时，确保后台实体抽取任务也被取消
+            if not entity_task.done():
+                entity_task.cancel()
+
+    async def _stream_section(
+        self,
+        section: str,
+        label: str,
+        retrieve_fn,
+        query: str,
+        history: Optional[list[dict]],
+        extra_meta: Optional[dict] = None,
+        start_index: int = 1,
+    ) -> AsyncIterator[str]:
+        """单路检索 + LLM 流式回答，输出 section_start → token... → section_end。"""
+        # 检索
+        try:
+            sources = await retrieve_fn()
+        except Exception as exc:  # noqa: BLE001
+            yield _sse("section_start", {
+                "section": section, "label": label, "sources": [],
+                **(extra_meta or {}),
+            })
+            yield _sse("token", {"section": section, "content": f"⚠️ 检索失败: {exc}"})
+            yield _sse("section_end", {"section": section})
+            return
+
+        context = self._build_context(sources, start_index=start_index)
+
+        # 推送 section 元信息
+        meta = {
+            "section": section,
+            "label": label,
+            "sources": [s.model_dump() for s in sources],
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+        yield _sse("section_start", meta)
+
+        # 流式推送 LLM token
+        try:
+            async for token in self.llm.stream_chat(
+                query=query, context=context, history=history
+            ):
+                yield _sse("token", {"section": section, "content": token})
+        except Exception as exc:  # noqa: BLE001
+            yield _sse("token", {"section": section, "content": f"\n⚠️ 生成失败: {exc}"})
+
+        yield _sse("section_end", {"section": section})
 
     async def _three_way_retrieve(
         self, query: str, top_k: int
@@ -174,11 +349,11 @@ class Orchestrator:
     # 上下文组装
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _build_context(sources: list[SourceItem]) -> str:
+    def _build_context(sources: list[SourceItem], start_index: int = 1) -> str:
         if not sources:
             return ""
         blocks: list[str] = []
-        for idx, s in enumerate(sources, start=1):
+        for idx, s in enumerate(sources, start=start_index):
             title = s.title or s.source
             blocks.append(
                 f"[{idx}] (来源:{s.source} | 标题:{title})\n{s.content}"

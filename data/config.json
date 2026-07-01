@@ -5,7 +5,7 @@
       "deepseek": {
         "name": "DeepSeek",
         "api_base": "https://tokenhub.tencentmaas.com/plan/v3",
-        "api_key": "b64:c2stdHAta044dHlCUjB6dkdpcjc3SnVhU3BJeX",
+        "api_key": "b64:c2s",
         "model": "deepseek-v4-flash",
         "entity_model": "deepseek-v4-flash",
         "temperature": 0.7,
@@ -20,7 +20,7 @@
         "entity_model": "qwen36-35b",
         "temperature": "",
         "max_tokens": "",
-        "extra": "{\n  \"chat_template_kwargs\": {\n    \"enable_thinking\": true,\n    \"thinking\": true\n  }\n}"
+        "extra": "{\n  \"chat_template_kwargs\": {\n    \"enable_thinking\": false,\n    \"thinking\": false\n  }\n}"
       }
     }
   },

@@ -99,6 +99,36 @@ body {
 .msg.system { align-self: center; background: transparent; color: var(--muted); font-size: 13px; max-width: 100%; }
 .msg.error { align-self: center; background: rgba(239,68,68,.15); border: 1px solid var(--err); color: #fecaca; }
 
+/* all 模式 section 分块 */
+.msg.section-msg { border-left: 3px solid var(--accent, #6366f1); }
+.section-header {
+  font-size: 13px; font-weight: 600; color: var(--accent, #6366f1);
+  margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dashed var(--border);
+}
+
+/* markdown 渲染样式 */
+.msg-content { line-height: 1.6; word-wrap: break-word; }
+.msg-content p { margin: 0.5em 0; }
+.msg-content h1, .msg-content h2, .msg-content h3 { margin: 0.6em 0 0.3em; }
+.msg-content ul, .msg-content ol { margin: 0.3em 0; padding-left: 1.5em; }
+.msg-content li { margin: 0.2em 0; }
+.msg-content code {
+  background: rgba(255,255,255,.1); padding: 1px 4px; border-radius: 3px;
+  font-size: 0.9em; font-family: monospace;
+}
+.msg-content pre {
+  background: rgba(0,0,0,.3); padding: 10px; border-radius: 6px;
+  overflow-x: auto; margin: 0.5em 0;
+}
+.msg-content pre code { background: none; padding: 0; }
+.msg-content blockquote {
+  border-left: 3px solid var(--border); margin: 0.5em 0;
+  padding-left: 12px; color: var(--muted);
+}
+.msg-content table { border-collapse: collapse; margin: 0.5em 0; }
+.msg-content th, .msg-content td { border: 1px solid var(--border); padding: 4px 8px; }
+.msg-content a { color: var(--accent, #6366f1); }
+
 .composer {
   display: flex;
   gap: 10px;

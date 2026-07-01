@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import AsyncIterator, Optional
@@ -140,6 +141,7 @@ class LLMClient:
         extra_body = self.extra or None
         self._log_request("stream_chat", body)
         async with measure("llm", "stream_chat"):
+            stream = None
             try:
                 stream = await self.client.chat.completions.create(**body, extra_body=extra_body)
                 async for chunk in stream:
@@ -152,7 +154,21 @@ class LLMClient:
             except OpenAIError as exc:
                 raise LLMError(f"大模型调用失败: {exc}") from exc
             except Exception as exc:  # noqa: BLE001
+                # asyncio.CancelledError 是用户主动终止，不包装为错误
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 raise LLMError(f"大模型调用异常: {exc}") from exc
+            finally:
+                # 确保流式连接被关闭（用户终止时尤为关键）
+                if stream is not None:
+                    close = getattr(stream, "close", None)
+                    if close:
+                        try:
+                            result = close()
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception:  # noqa: BLE001
+                            pass
 
     async def chat(
         self,

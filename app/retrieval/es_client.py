@@ -87,6 +87,32 @@ def _expand_query(query: str) -> str:
     return " OR ".join(expanded)
 
 
+def _configure_es_compat(version: str) -> None:
+    """根据 ES 服务端版本调整 elasticsearch-py 8.x 客户端的兼容性请求头。
+
+    elasticsearch-py 8.x 默认将 Content-Type 从 application/json 转换为
+    application/vnd.elasticsearch+json; compatible-with=8。
+    ES 7.x 不认识此媒体类型会拒绝请求（400/406 错误）。
+
+    - v8: 保持默认行为（compatible-with=8，ES 8.x 接受）
+    - v7: 禁用转换，发送原始 application/json（ES 7.x 接受）
+    """
+    try:
+        from elasticsearch._sync.client import _base as sync_base
+        from elasticsearch._async.client import _base as async_base
+    except ImportError:
+        return
+
+    if version == "v7":
+        # 禁用 compat 转换：application/json 保持不变
+        sync_base._COMPAT_MIMETYPE_SUB = r"application/\g<1>"
+        async_base._COMPAT_MIMETYPE_SUB = r"application/\g<1>"
+    else:
+        # 恢复默认：application/json -> application/vnd.elasticsearch+json; compatible-with=8
+        sync_base._COMPAT_MIMETYPE_SUB = sync_base._COMPAT_MIMETYPE_TEMPLATE % (r"\g<1>",)
+        async_base._COMPAT_MIMETYPE_SUB = async_base._COMPAT_MIMETYPE_TEMPLATE % (r"\g<1>",)
+
+
 class ESClient:
     """Elasticsearch 异步客户端封装。"""
 
@@ -111,6 +137,8 @@ class ESClient:
                 from elasticsearch import AsyncElasticsearch
             except ImportError as exc:  # pragma: no cover
                 raise RetrievalError("未安装 elasticsearch 依赖") from exc
+            # 根据版本调整兼容性请求头
+            _configure_es_compat(self.version)
             kwargs: dict = {"hosts": [self.url]}
             if self.username:
                 kwargs["basic_auth"] = (self.username, self.password)

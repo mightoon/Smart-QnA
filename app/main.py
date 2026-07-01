@@ -59,9 +59,23 @@ def create_app() -> FastAPI:
     # API 路由
     app.include_router(api_router)
 
-    # UI 静态资源
+    # UI 静态资源（禁用缓存，确保修改后浏览器获取最新文件）
     if UI_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
+        app.mount(
+            "/",
+            StaticFiles(directory=str(UI_DIR), html=True),
+            name="ui",
+        )
+
+    @app.middleware("http")
+    async def no_cache_static(request: Request, call_next):
+        response = await call_next(request)
+        # 对 js/css/html 禁用缓存
+        if request.url.path.endswith((".js", ".css", ".html")):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 
     return app
 
