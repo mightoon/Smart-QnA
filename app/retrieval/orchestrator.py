@@ -18,7 +18,7 @@ import asyncio
 import json
 from typing import AsyncIterator, Optional
 
-from app.core.llm_client import LLMClient
+from app.core.llm_client import LLMClient, FALLBACK_PREFIX
 from app.core.metrics import measure
 from app.retrieval.es_client import ESClient
 from app.retrieval.kg_client import KGClient
@@ -56,8 +56,12 @@ class Orchestrator:
                 sources, entities = await self._retrieve(request)
                 context = self._build_context(sources)
                 answer = await self.llm.chat(
-                    query=request.query, context=context, history=self._history(request)
+                    query=request.query, context=context, history=self._history(request),
+                    cite_sources=request.cite_sources,
                 )
+                # 有检索模式但无结果时，拼接兜底前缀（纯对话模式不加）
+                if not sources and request.mode is not None:
+                    answer = FALLBACK_PREFIX + answer
             m["tokens"] = 0  # token 由 LLM 内部埋点记录
         return ChatResult(
             answer=answer,
@@ -88,10 +92,15 @@ class Orchestrator:
             })
 
             # 2) 流式推送模型 token
+            section = request.mode.value if request.mode else None
+            # 有检索模式但无结果时，先输出兜底前缀（纯对话模式不加）
+            if not sources and request.mode is not None:
+                yield _sse("token", {"section": section, "content": FALLBACK_PREFIX})
             async for token in self.llm.stream_chat(
-                query=request.query, context=context, history=self._history(request)
+                query=request.query, context=context, history=self._history(request),
+                cite_sources=request.cite_sources,
             ):
-                yield _sse("token", {"content": token})
+                yield _sse("token", {"section": section, "content": token})
 
             # 3) 结束事件
             yield _sse("done", {})
@@ -135,6 +144,7 @@ class Orchestrator:
         query = request.query
         top_k = request.top_k
         history = self._history(request)
+        cite_sources = request.cite_sources
         entity_task = asyncio.create_task(self._safe_entities(query))
 
         all_sources: list[SourceItem] = []
@@ -146,7 +156,9 @@ class Orchestrator:
             srcs = await self.es.search_article(query, top_k)
             all_sources.extend(srcs)
             ctx = self._build_context(srcs, start_index=source_offset + 1)
-            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            ans = await self.llm.chat(query=query, context=ctx, history=history, cite_sources=cite_sources)
+            if not srcs:
+                ans = FALLBACK_PREFIX + ans
             sections.append(f"📖 文章检索 (Article)\n{ans}")
             source_offset += len(srcs)
         except Exception as exc:  # noqa: BLE001
@@ -157,7 +169,9 @@ class Orchestrator:
             srcs = await self.es.search_qna(query, top_k)
             all_sources.extend(srcs)
             ctx = self._build_context(srcs, start_index=source_offset + 1)
-            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            ans = await self.llm.chat(query=query, context=ctx, history=history, cite_sources=cite_sources)
+            if not srcs:
+                ans = FALLBACK_PREFIX + ans
             sections.append(f"💬 问答检索 (QnA)\n{ans}")
             source_offset += len(srcs)
         except Exception as exc:  # noqa: BLE001
@@ -169,7 +183,9 @@ class Orchestrator:
             srcs = await self.kg.search_by_entities(entities, top_k)
             all_sources.extend(srcs)
             ctx = self._build_context(srcs, start_index=source_offset + 1)
-            ans = await self.llm.chat(query=query, context=ctx, history=history)
+            ans = await self.llm.chat(query=query, context=ctx, history=history, cite_sources=cite_sources)
+            if not srcs:
+                ans = FALLBACK_PREFIX + ans
             sections.append(f"🔗 知识图谱 (KG)\n{ans}")
         except Exception as exc:  # noqa: BLE001
             sections.append(f"🔗 知识图谱 (KG)\n⚠️ 失败: {exc}")
@@ -186,6 +202,7 @@ class Orchestrator:
         query = request.query
         top_k = request.top_k
         history = self._history(request)
+        cite_sources = request.cite_sources
 
         # 后台启动实体抽取（kg 路依赖）
         entity_task = asyncio.create_task(self._safe_entities(query))
@@ -200,6 +217,7 @@ class Orchestrator:
                 lambda: self.es.search_article(query, top_k),
                 query, history,
                 start_index=source_offset + 1,
+                cite_sources=cite_sources,
             ):
                 # 从 section_start 事件中提取来源数量
                 if "section_start" in event:
@@ -219,6 +237,7 @@ class Orchestrator:
                 lambda: self.es.search_qna(query, top_k),
                 query, history,
                 start_index=source_offset + 1,
+                cite_sources=cite_sources,
             ):
                 if "section_start" in event:
                     try:
@@ -238,6 +257,7 @@ class Orchestrator:
                 query, history,
                 extra_meta={"entities": entities},
                 start_index=source_offset + 1,
+                cite_sources=cite_sources,
             ):
                 yield event
 
@@ -256,6 +276,7 @@ class Orchestrator:
         history: Optional[list[dict]],
         extra_meta: Optional[dict] = None,
         start_index: int = 1,
+        cite_sources: bool = True,
     ) -> AsyncIterator[str]:
         """单路检索 + LLM 流式回答，输出 section_start → token... → section_end。"""
         # 检索
@@ -283,9 +304,12 @@ class Orchestrator:
         yield _sse("section_start", meta)
 
         # 流式推送 LLM token
+        # 检索无结果时，先输出兜底前缀
+        if not sources:
+            yield _sse("token", {"section": section, "content": FALLBACK_PREFIX})
         try:
             async for token in self.llm.stream_chat(
-                query=query, context=context, history=history
+                query=query, context=context, history=history, cite_sources=cite_sources
             ):
                 yield _sse("token", {"section": section, "content": token})
         except Exception as exc:  # noqa: BLE001

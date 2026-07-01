@@ -88,14 +88,14 @@ def _expand_query(query: str) -> str:
 
 
 def _configure_es_compat(version: str) -> None:
-    """根据 ES 服务端版本调整 elasticsearch-py 8.x 客户端的兼容性请求头。
+    """根据 ES 服务端版本调整 elasticsearch-py 8.x 客户端的兼容性。
 
-    elasticsearch-py 8.x 默认将 Content-Type 从 application/json 转换为
-    application/vnd.elasticsearch+json; compatible-with=8。
-    ES 7.x 不认识此媒体类型会拒绝请求（400/406 错误）。
+    需要处理两个问题：
+    1. 媒体类型：8.x 客户端默认发送 compatible-with=8 的 Content-Type，ES 7.x 不认识
+    2. 产品校验：8.x 客户端检查响应头 x-elastic-product，ES 7.x 不发送此头
 
-    - v8: 保持默认行为（compatible-with=8，ES 8.x 接受）
-    - v7: 禁用转换，发送原始 application/json（ES 7.x 接受）
+    - v8: 保持默认行为
+    - v7: 禁用媒体类型转换 + 跳过产品校验
     """
     try:
         from elasticsearch._sync.client import _base as sync_base
@@ -104,13 +104,52 @@ def _configure_es_compat(version: str) -> None:
         return
 
     if version == "v7":
-        # 禁用 compat 转换：application/json 保持不变
+        # 1. 禁用 compat 转换：application/json 保持不变
         sync_base._COMPAT_MIMETYPE_SUB = r"application/\g<1>"
         async_base._COMPAT_MIMETYPE_SUB = r"application/\g<1>"
+        # 2. 猴子补丁 perform_request，跳过产品校验
+        _patch_product_check(sync_base.BaseClient, is_async=False)
+        _patch_product_check(async_base.BaseClient, is_async=True)
     else:
         # 恢复默认：application/json -> application/vnd.elasticsearch+json; compatible-with=8
         sync_base._COMPAT_MIMETYPE_SUB = sync_base._COMPAT_MIMETYPE_TEMPLATE % (r"\g<1>",)
         async_base._COMPAT_MIMETYPE_SUB = async_base._COMPAT_MIMETYPE_TEMPLATE % (r"\g<1>",)
+        # 恢复产品校验
+        _restore_product_check(sync_base.BaseClient, is_async=False)
+        _restore_product_check(async_base.BaseClient, is_async=True)
+
+
+def _patch_product_check(base_cls, is_async: bool) -> None:
+    """打补丁跳过 x-elastic-product 产品校验（ES 7.x 不发送此头）。"""
+    if getattr(base_cls, "_orig_perform_request", None) is not None:
+        return  # 已打过补丁
+
+    if is_async:
+        orig = base_cls._perform_request
+
+        async def patched(self, *args, **kwargs):
+            self._verified_elasticsearch = True
+            return await orig(self, *args, **kwargs)
+
+        base_cls._orig_perform_request = orig
+        base_cls._perform_request = patched
+    else:
+        orig = base_cls._perform_request
+
+        def patched(self, *args, **kwargs):
+            self._verified_elasticsearch = True
+            return orig(self, *args, **kwargs)
+
+        base_cls._orig_perform_request = orig
+        base_cls._perform_request = patched
+
+
+def _restore_product_check(base_cls, is_async: bool) -> None:
+    """恢复原始的产品校验逻辑。"""
+    orig = getattr(base_cls, "_orig_perform_request", None)
+    if orig is not None:
+        base_cls._perform_request = orig
+        base_cls._orig_perform_request = None
 
 
 class ESClient:

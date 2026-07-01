@@ -26,6 +26,7 @@ ITEM_SECTIONS: dict[str, tuple[str, ...]] = {
     "llm": ("api_key",),
     "elasticsearch": ("password",),
     "neo4j": ("password",),
+    "nebula": ("password",),
     "rerank": ("api_key",),
     "embedding": ("api_key",),
     "milvus": (),

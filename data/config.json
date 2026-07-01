@@ -5,7 +5,7 @@
       "deepseek": {
         "name": "DeepSeek",
         "api_base": "https://tokenhub.tencentmaas.com/plan/v3",
-        "api_key": "b64:c2s",
+        "api_key": "b64:c2stdHAta044dHlCUjB6dkdpcjc3S",
         "model": "deepseek-v4-flash",
         "entity_model": "deepseek-v4-flash",
         "temperature": 0.7,
@@ -62,6 +62,22 @@
       }
     }
   },
+  "nebula": {
+    "active": "default",
+    "items": {
+      "default": {
+        "name": "默认",
+        "host": "localhost:9669",
+        "username": "root",
+        "password": "",
+        "space": "default",
+        "node_key": "name",
+        "max_neighbors": 10,
+        "excluded_relations": "contains,references"
+      }
+    }
+  },
+  "graph_db": "neo4j",
   "rerank": {
     "active": "default",
     "items": {

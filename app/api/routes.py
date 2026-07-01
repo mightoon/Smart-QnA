@@ -28,6 +28,7 @@ from app.core.embedding_client import EmbeddingClient
 from app.core.metrics import get_metrics
 from app.retrieval.es_client import ESClient
 from app.retrieval.kg_client import KGClient
+from app.retrieval.ng_client import NGClient
 from app.retrieval.rerank_client import RerankClient
 from app.retrieval.vec_client import VecClient
 from app.schemas.requests import ChatRequest, ServerConfigRequest, SetActiveRequest
@@ -175,6 +176,20 @@ async def update_server(payload: ServerConfigRequest):
     return JSONResponse(manager.masked_section("server"))
 
 
+@router.put("/config/graph_db")
+async def update_graph_db(body: dict):
+    """切换图数据库类型（neo4j / nebula）。"""
+    manager = deps.get_config_manager()
+    graph_db = body.get("graph_db", "neo4j")
+    if graph_db not in ("neo4j", "nebula"):
+        raise HTTPException(status_code=400, detail="graph_db 必须为 neo4j 或 nebula")
+    config = manager.get()
+    config["graph_db"] = graph_db
+    manager.save(config)
+    deps.rebuild_clients()
+    return JSONResponse({"graph_db": graph_db})
+
+
 # ---------------------------------------------------------------------- #
 # 辅助
 # ---------------------------------------------------------------------- #
@@ -205,6 +220,8 @@ async def _validate_section(section: str, config: dict) -> dict:
         return await ESClient(config).validate()
     if section == "neo4j":
         return await KGClient(config).validate()
+    if section == "nebula":
+        return await NGClient(config).validate()
     if section == "rerank":
         return await RerankClient(config).validate()
     if section == "embedding":

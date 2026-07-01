@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
         await deps.get_kg_client().close()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        await deps.get_ng_client().close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def create_app() -> FastAPI:

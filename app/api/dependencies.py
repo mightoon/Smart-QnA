@@ -11,6 +11,7 @@ from app.core.llm_client import LLMClient
 from app.core.embedding_client import EmbeddingClient
 from app.retrieval.es_client import ESClient
 from app.retrieval.kg_client import KGClient
+from app.retrieval.ng_client import NGClient
 from app.retrieval.orchestrator import Orchestrator
 from app.retrieval.rerank_client import RerankClient
 from app.retrieval.vec_client import VecClient
@@ -49,6 +50,21 @@ def get_kg_client() -> KGClient:
 
 
 @lru_cache(maxsize=1)
+def get_ng_client() -> NGClient:
+    cfg = get_config_manager().get_active_item("nebula")
+    return NGClient(cfg)
+
+
+def get_graph_client():
+    """根据配置中的 graph_db 选择返回 Neo4j 或 Nebula 客户端。"""
+    config = get_config_manager().get()
+    graph_db = config.get("graph_db", "neo4j")
+    if graph_db == "nebula":
+        return get_ng_client()
+    return get_kg_client()
+
+
+@lru_cache(maxsize=1)
 def get_rerank_client() -> RerankClient:
     try:
         cfg = get_config_manager().get_active_item("rerank")
@@ -80,7 +96,7 @@ def get_orchestrator() -> Orchestrator:
     return Orchestrator(
         get_llm_client(),
         get_es_client(),
-        get_kg_client(),
+        get_graph_client(),
         get_rerank_client(),
         get_vec_client(),
     )
@@ -89,7 +105,7 @@ def get_orchestrator() -> Orchestrator:
 def rebuild_clients() -> None:
     """配置更新后重建各客户端。"""
     for fn in (
-        get_llm_client, get_es_client, get_kg_client,
+        get_llm_client, get_es_client, get_kg_client, get_ng_client,
         get_rerank_client, get_embedding_client, get_vec_client,
         get_orchestrator,
     ):

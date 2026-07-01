@@ -33,6 +33,7 @@ class ChatRequest(BaseModel):
     )
     top_k: int = Field(5, ge=1, le=50, description="每个来源返回的最多条数")
     stream: bool = Field(True, description="是否以 SSE 流式返回")
+    cite_sources: bool = Field(True, description="回答中是否显示 [n] 来源标记")
     history: Optional[List[ChatMessage]] = Field(None, description="历史对话上下文")
 
 

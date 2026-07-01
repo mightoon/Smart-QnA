@@ -28,17 +28,35 @@ ENTITY_EXTRACTION_PROMPT = (
 
 # RAG 答题系统提示词（仅在有检索上下文时使用）。
 RAG_SYSTEM_PROMPT = (
-    "你是一个严谨的智能问答助手。请根据下方【参考资料】回答用户问题。\n"
+    "你是一个严谨的智能问答助手。下方【参考资料】来自知识库检索结果。\n"
     "要求：\n"
-    "1. 仅依据参考资料作答，不要编造；若资料不足，请明确说明。\n"
-    "2. 在关键信息后用 [n] 标注引用来源编号。\n"
-    "3. 回答简洁、条理清晰。"
+    "1. 首先判断参考资料是否与用户问题相关。\n"
+    "2. 如果相关：依据参考资料回答，在关键信息后用 [n] 标注引用来源编号，不要编造。\n"
+    "3. 如果不相关或无法回答：不要复述参考资料的内容，"
+    "直接回答「参考资料中未包含相关信息，以下是基于大模型自身能力的回答：」，"
+    "然后基于你自身的知识回答用户问题。\n"
+    "4. 回答简洁、条理清晰。"
 )
 
-# 纯对话系统提示词（无检索上下文时使用，允许模型自由作答）。
+# RAG 答题系统提示词（不显示来源标记时使用）。
+RAG_SYSTEM_PROMPT_NO_CITE = (
+    "你是一个严谨的智能问答助手。下方【参考资料】来自知识库检索结果。\n"
+    "要求：\n"
+    "1. 首先判断参考资料是否与用户问题相关。\n"
+    "2. 如果相关：依据参考资料回答，不要编造。\n"
+    "3. 如果不相关或无法回答：不要复述参考资料的内容，"
+    "直接回答「参考资料中未包含相关信息，以下是基于大模型自身能力的回答：」，"
+    "然后基于你自身的知识回答用户问题。\n"
+    "4. 回答简洁、条理清晰，不要使用 [n] 引用标记。"
+)
+
+# 无检索结果时的兜底提示词（允许模型自由作答）。
 CHAT_SYSTEM_PROMPT = (
     "你是一个智能问答助手，请友好、准确地回答用户的问题。"
 )
+
+# 无检索结果时强制输出的前缀。
+FALLBACK_PREFIX = "参考资料中未包含相关信息，以下是基于大模型自身能力的回答：\n\n"
 
 
 def _parse_extra(value: object) -> dict:
@@ -126,9 +144,10 @@ class LLMClient:
         query: str,
         context: str = "",
         history: Optional[list[dict]] = None,
+        cite_sources: bool = True,
     ) -> AsyncIterator[str]:
         """流式对话补全，逐 token 产出文本片段。"""
-        messages = self._build_messages(query, context, history)
+        messages = self._build_messages(query, context, history, cite_sources)
         body = {
             "model": self.model,
             "messages": messages,
@@ -175,10 +194,11 @@ class LLMClient:
         query: str,
         context: str = "",
         history: Optional[list[dict]] = None,
+        cite_sources: bool = True,
     ) -> str:
         """非流式对话补全，返回完整文本。"""
         chunks: list[str] = []
-        async for token in self.stream_chat(query, context, history):
+        async for token in self.stream_chat(query, context, history, cite_sources):
             chunks.append(token)
         return "".join(chunks)
 
@@ -257,15 +277,23 @@ class LLMClient:
         query: str,
         context: str,
         history: Optional[list[dict]],
+        cite_sources: bool = True,
     ) -> list[dict]:
         messages: list[dict] = []
         if context:
+            prompt = RAG_SYSTEM_PROMPT if cite_sources else RAG_SYSTEM_PROMPT_NO_CITE
             messages.append({
                 "role": "system",
-                "content": f"{RAG_SYSTEM_PROMPT}\n\n【参考资料】\n{context}",
+                "content": f"{prompt}\n\n【参考资料】\n{context}",
             })
         else:
-            messages.append({"role": "system", "content": CHAT_SYSTEM_PROMPT})
+            messages.append({
+                "role": "system",
+                "content": (
+                    "参考资料中未包含相关信息，以下是基于大模型自身能力的回答。"
+                    "请友好、准确地回答用户的问题。"
+                ),
+            })
         if history:
             for item in history[-10:]:
                 role = item.get("role")

@@ -124,8 +124,9 @@
     const mode = $("#modeSelect").value;
     const top_k = parseInt($("#topkInput").value, 10) || 5;
     const stream = $("#streamCheck").checked;
+    const cite_sources = $("#citeCheck").checked;
 
-    const reqBody = { query, mode: mode || null, top_k, stream };
+    const reqBody = { query, mode: mode || null, top_k, stream, cite_sources };
     addMsg("user", query);
     queryInput.value = "";
     sendBtn.hidden = true;
@@ -217,18 +218,18 @@
         for (const block of blocks) {
           handleEvent(block, {
             onMeta: (data) => renderSources(data.sources),
-            onToken: (data) => {
-              if (data.section) {
-                const sec = sectionMsgs[data.section];
-                if (sec) {
-                  sec.buf += data.content;
-                  setMsgContent(sec.msg, sec.buf);
-                }
-              } else {
-                buf += data.content;
-                setMsgContent(currentMsg, buf);
-              }
-            },
+          onToken: (data) => {
+            if (data.section && sectionMsgs[data.section]) {
+              // all 模式：token 路由到对应 section 消息块
+              const sec = sectionMsgs[data.section];
+              sec.buf += data.content;
+              setMsgContent(sec.msg, sec.buf);
+            } else {
+              // 非分块模式（article/qna/kg/纯对话）：写入当前消息
+              buf += data.content;
+              setMsgContent(currentMsg, buf);
+            }
+          },
             onSectionStart: (data) => {
               const msg = addMsg("assistant", "");
               msg.classList.add("section-msg");
@@ -358,6 +359,16 @@
       { key: "max_neighbors", label: "最大邻居数", type: "number" },
       { key: "excluded_relations", label: "排除的关系类型 (逗号分隔)", type: "text" },
     ]},
+    nebula: { title: "NebulaGraph 图数据库", fields: [
+      { key: "name", label: "配置名称", type: "text" },
+      { key: "host", label: "Host (graphd 地址 host:port)", type: "text" },
+      { key: "username", label: "Username", type: "text" },
+      { key: "password", label: "Password", type: "password", sensitive: true },
+      { key: "space", label: "Space (图空间)", type: "text" },
+      { key: "node_key", label: "节点主键属性名", type: "text" },
+      { key: "max_neighbors", label: "最大邻居数", type: "number" },
+      { key: "excluded_relations", label: "排除的关系类型 (逗号分隔)", type: "text" },
+    ]},
     rerank: { title: "Rerank 重排模型", fields: [
       { key: "name", label: "配置名称", type: "text" },
       { key: "api_base", label: "API Base", type: "text" },
@@ -405,6 +416,28 @@
     root.innerHTML = "";
     const sections = Object.keys(SECTION_META);
     sections.forEach((section, idx) => {
+      // 在 neo4j 段前插入图数据库选择器
+      if (section === "neo4j") {
+        const gdbCard = document.createElement("div");
+        gdbCard.className = "cfg-card";
+        const gdbVal = data.graph_db || "neo4j";
+        gdbCard.innerHTML =
+          '<div class="cfg-card-head"><h2>图数据库选择</h2></div>' +
+          '<div class="cfg-graphdb">' +
+            '<label class="radio"><input type="radio" name="graphDb" value="neo4j" ' +
+              (gdbVal === "neo4j" ? "checked" : "") + ' /> Neo4j</label>' +
+            '<label class="radio"><input type="radio" name="graphDb" value="nebula" ' +
+              (gdbVal === "nebula" ? "checked" : "") + ' /> NebulaGraph</label>' +
+          '</div>';
+        root.appendChild(gdbCard);
+        gdbCard.querySelectorAll('input[name="graphDb"]').forEach((el) => {
+          el.addEventListener("change", () => saveGraphDb(el.value));
+        });
+        const hr0 = document.createElement("hr");
+        hr0.className = "cfg-divider";
+        root.appendChild(hr0);
+      }
+
       const card = document.createElement("div");
       card.className = "cfg-card";
       card.dataset.section = section;
@@ -689,6 +722,26 @@
       await loadConfig();
     } catch (e) {
       alert("删除异常：" + e.message);
+    }
+  }
+
+  // ---------- server ----------
+  // ---------- graph_db ----------
+  async function saveGraphDb(value) {
+    try {
+      const resp = await fetch("/api/config/graph_db", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ graph_db: value }),
+      });
+      if (!resp.ok) {
+        const d = await resp.json();
+        alert("切换失败：" + (d.detail?.error?.message || resp.status));
+        return;
+      }
+      await loadConfig();
+    } catch (e) {
+      alert("切换异常：" + e.message);
     }
   }
 
