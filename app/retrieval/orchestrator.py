@@ -132,7 +132,7 @@ class Orchestrator:
             sources = await self.es.search_qna(request.query, top_k)
         elif mode == ChatMode.KG:
             entities = await self._safe_entities(request.query)
-            sources = await self.kg.search_by_entities(entities, top_k)
+            sources = await self.kg.search_by_entities(entities, top_k, request.query)
 
         return sources, entities
 
@@ -180,7 +180,7 @@ class Orchestrator:
         # KG
         entities = await entity_task
         try:
-            srcs = await self.kg.search_by_entities(entities, top_k)
+            srcs = await self.kg.search_by_entities(entities, top_k, query)
             all_sources.extend(srcs)
             ctx = self._build_context(srcs, start_index=source_offset + 1)
             ans = await self.llm.chat(query=query, context=ctx, history=history, cite_sources=cite_sources)
@@ -253,7 +253,7 @@ class Orchestrator:
             entities = await entity_task
             async for event in self._stream_section(
                 "kg", "🔗 知识图谱 (KG)",
-                lambda: self.kg.search_by_entities(entities, top_k),
+                lambda: self.kg.search_by_entities(entities, top_k, query),
                 query, history,
                 extra_meta={"entities": entities},
                 start_index=source_offset + 1,
@@ -325,7 +325,7 @@ class Orchestrator:
         article_task = asyncio.create_task(self.es.search_article(query, top_k))
         qna_task = asyncio.create_task(self.es.search_qna(query, top_k))
         entities = await entity_task
-        kg_task = asyncio.create_task(self.kg.search_by_entities(entities, top_k))
+        kg_task = asyncio.create_task(self.kg.search_by_entities(entities, top_k, query))
         results = await asyncio.gather(
             article_task, qna_task, kg_task, return_exceptions=True
         )
@@ -347,7 +347,7 @@ class Orchestrator:
         qna_task = asyncio.create_task(self.es.search_qna(query, top_k))
         vec_task = asyncio.create_task(self.vec.search(query, top_k))
         entities = await entity_task
-        kg_task = asyncio.create_task(self.kg.search_by_entities(entities, top_k))
+        kg_task = asyncio.create_task(self.kg.search_by_entities(entities, top_k, query))
         results = await asyncio.gather(
             article_task, qna_task, kg_task, vec_task, return_exceptions=True
         )

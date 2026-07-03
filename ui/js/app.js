@@ -371,6 +371,8 @@
       { key: "neighbor_tags", label: "邻居 Tag 列表 (逗号分隔，留空查所有)", type: "text" },
       { key: "exact_match", label: "精确匹配 VID", type: "checkbox" },
       { key: "relation_types", label: "关注的关系类型 (逗号分隔，留空查所有)", type: "text" },
+      { key: "max_depth", label: "查询深度 (1=一跳, 2=二跳推理)", type: "number" },
+      { key: "max_depth_limit", label: "二跳查询每邻居最大条数", type: "number" },
     ]},
     rerank: { title: "Rerank 重排模型", fields: [
       { key: "name", label: "配置名称", type: "text" },

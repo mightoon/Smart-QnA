@@ -52,7 +52,7 @@ def get_kg_client() -> KGClient:
 @lru_cache(maxsize=1)
 def get_ng_client() -> NGClient:
     cfg = get_config_manager().get_active_item("nebula")
-    return NGClient(cfg)
+    return NGClient(cfg, get_llm_client())
 
 
 def get_graph_client():

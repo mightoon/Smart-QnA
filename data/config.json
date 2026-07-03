@@ -76,7 +76,11 @@
         "excluded_relations": "contains,references",
         "neighbor_tags": "",
         "exact_match": false,
-        "relation_types": ""
+        "relation_types": "",
+        "use_llm_query": false,
+        "schema": "",
+        "max_depth": 2,
+        "max_depth_limit": 5
       }
     }
   },

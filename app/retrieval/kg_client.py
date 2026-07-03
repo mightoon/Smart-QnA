@@ -126,7 +126,7 @@ class KGClient:
 
     # ------------------------------------------------------------------ #
     async def search_by_entities(
-        self, entities: list[str], top_k: int = 5
+        self, entities: list[str], top_k: int = 5, query: str = ""
     ) -> list[SourceItem]:
         """根据实体列表检索图谱相关节点。"""
         if not entities:
