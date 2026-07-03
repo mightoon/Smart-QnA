@@ -365,9 +365,12 @@
       { key: "username", label: "Username", type: "text" },
       { key: "password", label: "Password", type: "password", sensitive: true },
       { key: "space", label: "Space (图空间)", type: "text" },
-      { key: "node_key", label: "节点主键属性名", type: "text" },
+      { key: "node_key", label: "节点主键属性名 (如 KGIndividual.name)", type: "text" },
       { key: "max_neighbors", label: "最大邻居数", type: "number" },
       { key: "excluded_relations", label: "排除的关系类型 (逗号分隔)", type: "text" },
+      { key: "neighbor_tags", label: "邻居 Tag 列表 (逗号分隔，留空查所有)", type: "text" },
+      { key: "exact_match", label: "精确匹配 VID", type: "checkbox" },
+      { key: "relation_types", label: "关注的关系类型 (逗号分隔，留空查所有)", type: "text" },
     ]},
     rerank: { title: "Rerank 重排模型", fields: [
       { key: "name", label: "配置名称", type: "text" },

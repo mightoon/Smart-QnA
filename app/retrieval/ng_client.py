@@ -11,8 +11,14 @@ NebulaGraph 的 Python 客户端（nebula3-python）是同步的，
   username/password: 认证
   space:             图空间名（NebulaGraph 用 space 做数据隔离）
   node_key:          节点主键属性名（默认 name），用于实体匹配
+                     支持 "Tag.prop" 格式，如 "KGIndividual.name"
   max_neighbors:     每个节点最多保留的邻居关系数（默认 10）
-  excluded_relations: 排除的关系类型列表
+  excluded_relations: 排除的关系类型列表（黑名单，默认 ["contains", "references"]）
+  neighbor_tags:     邻居节点可能的 Tag 列表（逗号分隔，可选）
+                     不填则用 properties(m) 取所有属性，Python 中找 name
+  exact_match:       是否精确匹配 VID（默认 false，用 CONTAINS 模糊匹配）
+  relation_types:    关注的关系类型白名单（逗号分隔，可选）
+                     不填则查所有关系类型
 """
 
 from __future__ import annotations
@@ -35,6 +41,15 @@ def _normalize_excluded_relations(value: Any) -> list[str]:
     return [s.strip() for s in str(value).split(",") if s.strip()]
 
 
+def _normalize_str_list(value: Any) -> list[str]:
+    """将逗号分隔字符串或列表转为字符串列表，空则返回空列表。"""
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [s.strip() for s in str(value).split(",") if s.strip()]
+
+
 class NGClient:
     """NebulaGraph 异步客户端封装（底层为同步，通过 to_thread 转异步）。"""
 
@@ -48,6 +63,9 @@ class NGClient:
         self.excluded_relations = _normalize_excluded_relations(
             ng_config.get("excluded_relations", _DEFAULT_EXCLUDED_RELATIONS)
         )
+        self.neighbor_tags = _normalize_str_list(ng_config.get("neighbor_tags"))
+        self.exact_match = bool(ng_config.get("exact_match", False))
+        self.relation_types = _normalize_str_list(ng_config.get("relation_types"))
         self._pool: Any = None
 
     # ------------------------------------------------------------------ #
@@ -105,6 +123,9 @@ class NGClient:
         self.excluded_relations = _normalize_excluded_relations(
             ng_config.get("excluded_relations", _DEFAULT_EXCLUDED_RELATIONS)
         )
+        self.neighbor_tags = _normalize_str_list(ng_config.get("neighbor_tags"))
+        self.exact_match = bool(ng_config.get("exact_match", False))
+        self.relation_types = _normalize_str_list(ng_config.get("relation_types"))
         self._pool = None
 
     async def close(self) -> None:
@@ -144,7 +165,9 @@ class NGClient:
         self, entities: list[str], top_k: int = 5
     ) -> list[SourceItem]:
         """根据实体列表检索图谱相关节点。"""
+        print(f"  [Nebula] search_by_entities 被调用, entities={entities}, top_k={top_k}")
         if not entities:
+            print("  [Nebula] entities 为空，返回空结果")
             return []
         per_entity = max(1, top_k // max(1, len(entities)))
         items: list[SourceItem] = []
@@ -154,6 +177,7 @@ class NGClient:
                 raw_results = await asyncio.to_thread(
                     self._search_sync, entities, per_entity, top_k
                 )
+                print(f"  [Nebula] 查询返回 {len(raw_results)} 条结果")
                 for name, labels, rels in raw_results:
                     content = self._format_record(name, labels, rels)
                     items.append(
@@ -165,56 +189,187 @@ class NGClient:
                         )
                     )
             except Exception as exc:  # noqa: BLE001
+                print(f"  [Nebula] search_by_entities 异常: {exc}")
                 raise KGConnectionError(f"NebulaGraph 检索失败: {exc}") from exc
         return items
 
     def _search_sync(
         self, entities: list[str], per_entity: int, top_k: int
     ) -> list[tuple]:
-        """同步方法：执行 NebulaGraph nGQL 查询。"""
+        """同步方法：执行 NebulaGraph nGQL 查询。
+
+        拆成两步简单查询：
+        1. MATCH 查找匹配的节点（支持精确/模糊匹配）
+        2. MATCH 查找每个节点的邻居关系（支持 relation_types 白名单、neighbor_tags 属性访问）
+        复杂逻辑（过滤、截断、格式化）在 Python 中完成。
+        """
         session = self.pool.get_session(self.username, self.password)
         results: list[tuple] = []
         try:
             session.execute(f'USE `{self.space}`')
 
-            excluded_str = ",".join(f'"{r}"' for r in self.excluded_relations)
-            node_key = self._build_prop_expr(self.node_key)
+            node_key_expr = self._build_prop_expr(self.node_key)
+            excluded_set = set(self.excluded_relations)
             max_n = self.max_neighbors
+            neighbor_tags = self.neighbor_tags
+            relation_types = self.relation_types
+
+            # 从 node_key 中提取 prop 名（用于 properties(m) 中查找）
+            prop_name = self.node_key.split(".")[-1] if "." in self.node_key else self.node_key
 
             for entity in entities:
-                # 使用 nGQL MATCH 语法查询（NebulaGraph 3.x 支持）
-                # 按节点属性做大小写不敏感包含匹配
-                ngql = (
-                    f'USE `{self.space}`; '
-                    f'MATCH (n) '
-                    f'WHERE toLower({node_key}) CONTAINS toLower("{entity}") '
-                    f'OPTIONAL MATCH (n)-[r]-(m) '
-                    f'WHERE NOT type(r) IN [{excluded_str}] '
-                    f'  AND coalesce(m.{self._build_prop_expr(self.node_key, prefix="m")}, "") <> "" '
-                    f'WITH n, collect(distinct [type(r), coalesce(m.{self._build_prop_expr(self.node_key, prefix="m")}, "")]) AS all_rels '
-                    f'WITH n, all_rels[..{max_n}] AS rels '
-                    f'RETURN {node_key} AS name, tags(n) AS labels, rels '
-                    f'LIMIT {per_entity}'
-                )
-                resp = session.execute(ngql)
+                # 第一步：查找匹配的节点
+                if self.exact_match:
+                    # 精确匹配 VID
+                    ngql_nodes = (
+                        f'MATCH (n) '
+                        f'WHERE id(n) == "{entity}" '
+                        f'RETURN id(n) AS vid, {node_key_expr} AS name, tags(n) AS labels '
+                        f'LIMIT {per_entity}'
+                    )
+                else:
+                    # 模糊匹配（先 toLower，失败降级 CONTAINS）
+                    ngql_nodes = (
+                        f'MATCH (n) '
+                        f'WHERE toLower({node_key_expr}) CONTAINS toLower("{entity}") '
+                        f'RETURN id(n) AS vid, {node_key_expr} AS name, tags(n) AS labels '
+                        f'LIMIT {per_entity}'
+                    )
+                print(f"  [Nebula] 节点查询 nGQL: {ngql_nodes}")
+                resp = session.execute(ngql_nodes)
+                if not resp.is_succeeded() and not self.exact_match:
+                    print(f"  [Nebula] toLower 查询失败: {resp.error_msg()}, 尝试普通 CONTAINS")
+                    ngql_nodes = (
+                        f'MATCH (n) '
+                        f'WHERE {node_key_expr} CONTAINS "{entity}" '
+                        f'RETURN id(n) AS vid, {node_key_expr} AS name, tags(n) AS labels '
+                        f'LIMIT {per_entity}'
+                    )
+                    print(f"  [Nebula] 降级查询 nGQL: {ngql_nodes}")
+                    resp = session.execute(ngql_nodes)
                 if not resp.is_succeeded():
+                    print(f"  [Nebula] 节点查询失败: {resp.error_msg()}")
                     continue
 
+                row_count = 0
                 for rec in resp:
-                    name = rec.value_at(0) if rec.column_size() > 0 else None
-                    labels_raw = rec.value_at(1) if rec.column_size() > 1 else []
-                    rels_raw = rec.value_at(2) if rec.column_size() > 2 else []
+                    row_count += 1
+                    try:
+                        vals = list(rec.values())
+                        vid = vals[0] if len(vals) > 0 else None
+                        name = vals[1] if len(vals) > 1 else ""
+                        labels_raw = vals[2] if len(vals) > 2 else []
+                    except Exception:
+                        try:
+                            vid = rec.get_value("vid")
+                            name = rec.get_value("name")
+                            labels_raw = rec.get_value("labels")
+                        except Exception:
+                            vid = None
+                            name = ""
+                            labels_raw = []
 
-                    # NebulaGraph 返回的 labels 和 rels 可能是特殊类型，转为 list
                     labels = self._convert_labels(labels_raw)
-                    rels = self._convert_rels(rels_raw)
+                    print(f"  [Nebula] 命中节点: vid={vid}, name={name}, labels={labels}")
+
+                    if not vid:
+                        continue
+
+                    # 第二步：查找该节点的邻居关系
+                    rels: list[list[str]] = []
+                    try:
+                        vid_str = str(vid)
+                        if vid_str.startswith('"') and vid_str.endswith('"'):
+                            vid_filter = vid_str
+                        elif vid_str.replace("-", "").replace(".", "").isdigit():
+                            vid_filter = vid_str
+                        else:
+                            vid_filter = f'"{vid_str}"'
+
+                        # 关系类型过滤：白名单
+                        if relation_types:
+                            edge_types = "|".join(relation_types)
+                            edge_pattern = f'[:{edge_types}]'
+                        else:
+                            edge_pattern = ''
+
+                        # 邻居属性查询：有 neighbor_tags 则按 Tag 逐个取，否则用 properties(m)
+                        if neighbor_tags:
+                            # 按每个 Tag 取 prop，返回多列
+                            prop_cols = ", ".join(
+                                f'm.`{tag}`.`{prop_name}` AS `{tag}_{prop_name}`'
+                                for tag in neighbor_tags
+                            )
+                            ngql_rels = (
+                                f'MATCH (n)-[r{edge_pattern}]-(m) '
+                                f'WHERE id(n) == {vid_filter} '
+                                f'RETURN type(r) AS rtype, {prop_cols} '
+                                f'LIMIT {max_n}'
+                            )
+                        else:
+                            # 用 properties(m) 取所有属性
+                            ngql_rels = (
+                                f'MATCH (n)-[r{edge_pattern}]-(m) '
+                                f'WHERE id(n) == {vid_filter} '
+                                f'RETURN type(r) AS rtype, properties(m) AS props '
+                                f'LIMIT {max_n}'
+                            )
+
+                        print(f"  [Nebula] 邻居查询 nGQL: {ngql_rels}")
+                        resp2 = session.execute(ngql_rels)
+                        if resp2.is_succeeded():
+                            for rec2 in resp2:
+                                try:
+                                    vals2 = list(rec2.values())
+                                    rtype = str(vals2[0]) if len(vals2) > 0 else ""
+                                    if neighbor_tags:
+                                        # 从多列中取第一个非空值作为 target
+                                        target = ""
+                                        for v in vals2[1:]:
+                                            v_str = str(v) if v else ""
+                                            if v_str and v_str != "None" and v_str != "__NULL__":
+                                                target = v_str
+                                                break
+                                    else:
+                                        # 从 properties map 中找 prop_name
+                                        props_raw = vals2[1] if len(vals2) > 1 else {}
+                                        target = self._extract_prop_from_map(props_raw, prop_name)
+                                except Exception:
+                                    rtype = str(rec2.get_value("rtype") or "")
+                                    target = ""
+                                print(f"  [Nebula] 邻居: rtype={rtype}, target={target}")
+                                if rtype and rtype not in excluded_set and target and target != "None":
+                                    rels.append([rtype, target])
+                        else:
+                            print(f"  [Nebula] 邻居查询失败: {resp2.error_msg()}")
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  [Nebula] 邻居查询异常: {exc}")
 
                     results.append((str(name) if name else "", labels, rels))
                     if len(results) >= top_k:
                         return results
+                print(f"  [Nebula] 节点查询返回 {row_count} 行")
         finally:
             session.release()
         return results
+
+    @staticmethod
+    def _extract_prop_from_map(props_raw: Any, prop_name: str) -> str:
+        """从 NebulaGraph properties(m) 返回的 map 中提取指定属性值。"""
+        if not props_raw:
+            return ""
+        try:
+            # ValueWrapper 可能需要 .cast() 或直接作为 dict
+            if hasattr(props_raw, "cast"):
+                props = props_raw.cast()
+            elif isinstance(props_raw, dict):
+                props = props_raw
+            else:
+                props = dict(props_raw)
+            val = props.get(prop_name, "")
+            return str(val) if val else ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     @staticmethod
     def _convert_labels(raw: Any) -> list[str]:

@@ -359,8 +359,11 @@ class Orchestrator:
     async def _safe_entities(self, query: str) -> list[str]:
         """实体抽取失败时降级为空列表，不阻断主流程。"""
         try:
-            return await self.llm.extract_entities(query)
-        except Exception:  # noqa: BLE001
+            entities = await self.llm.extract_entities(query)
+            print(f"  [KG] 实体抽取结果: {entities}")
+            return entities
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [KG] 实体抽取失败: {exc}")
             return []
 
     @staticmethod
